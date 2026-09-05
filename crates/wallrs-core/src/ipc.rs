@@ -259,7 +259,54 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                     }
                 }
                 "shader" => {
-                    Response::Error("Shader wallpapers will be supported in Phase 4".into())
+                    let mut matched = false;
+                    let mut error = None;
+
+                    let gpu = crate::output::GpuContext {
+                        instance: &state.wgpu_instance,
+                        adapter: &state.wgpu_adapter,
+                        device: &state.wgpu_device,
+                        queue: &state.wgpu_queue,
+                    };
+
+                    for out in state.outputs.values_mut() {
+                        let matches = match &output {
+                            OutputSelector::All => true,
+                            OutputSelector::Named(name) => {
+                                out.name.as_deref() == Some(name.as_str())
+                            }
+                            OutputSelector::Span(names) => {
+                                out.name.as_ref().is_some_and(|n| names.contains(n))
+                            }
+                        };
+
+                        if matches {
+                            matched = true;
+                            let renderer =
+                                match wallrs_content_shader::ShaderRenderer::from_manifest(
+                                    &manifest, base_dir,
+                                ) {
+                                    Ok(r) => Box::new(r),
+                                    Err(e) => {
+                                        error = Some(e.to_string());
+                                        break;
+                                    }
+                                };
+
+                            if let Err(e) = out.set_renderer(renderer, &gpu) {
+                                error = Some(e.to_string());
+                                break;
+                            }
+                        }
+                    }
+
+                    if !matched {
+                        Response::Error(format!("No matching output found for selector {output:?}"))
+                    } else if let Some(err) = error {
+                        Response::Error(err)
+                    } else {
+                        Response::Ok
+                    }
                 }
                 "video" => Response::Error("Video wallpapers will be supported in Phase 6".into()),
                 other => Response::Error(format!("Unsupported wallpaper type: {other}")),

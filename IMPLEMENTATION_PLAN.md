@@ -316,13 +316,12 @@ Deliberadamente plano: no hay tipos de propiedad genéricos (`slider`, `combolis
 - **Criterio de aceptación:** cambiar el color de un output específico en runtime sin reiniciar `wallrsd`.
 
 ### Fase 3 — Content-type imagen
-- [ ] `wallrs-content-image` implementando el trait, con parallax basado en puntero.
 - [x] `wallrs-content-image` implementando el trait, con parallax basado en puntero y desplazamiento continuo (pan).
 - **Criterio de aceptación:** cargar un manifiesto de ejemplo con 2 capas y ver el parallax responder al mouse en tiempo real.
 
 ### Fase 4 — Content-type shader
-- [ ] Carga de `.wgsl` nativo.
-- [ ] Shim de compatibilidad `mainImage` → `fragment main` para `.glsl` estilo Shadertoy (un solo paso).
+- [x] Carga de `.wgsl` nativo.
+- [x] Shim de compatibilidad `mainImage` → `fragment main` para `.glsl` estilo Shadertoy (un solo paso).
 - **Criterio de aceptación:** correr 3 shaders públicos de Shadertoy (de un solo buffer) sin modificarlos más que pegar el código fuente.
 
 ### Fase 5 — Audio PipeWire

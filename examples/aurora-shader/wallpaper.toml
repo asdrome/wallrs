@@ -1,0 +1,6 @@
+[wallpaper]
+type = "shader"
+name = "aurora-shader"
+
+[shader]
+entry = "aurora.wgsl"

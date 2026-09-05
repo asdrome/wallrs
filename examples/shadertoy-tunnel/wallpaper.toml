@@ -1,0 +1,6 @@
+[wallpaper]
+type = "shader"
+name = "shadertoy-tunnel"
+
+[shader]
+entry = "tunnel.glsl"

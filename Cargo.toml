@@ -28,6 +28,7 @@ image = { version = "0.25", default-features = false, features = [
     "jpeg",
     "webp",
 ] }
+naga = { version = "30", features = ["glsl-in", "wgsl-out"] }
 pollster = "0.3"
 raw-window-handle = "0.6"
 serde = { version = "1.0", features = ["derive"] }

@@ -14,6 +14,7 @@ smithay-client-toolkit = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 wallrs-content-image = { path = "../wallrs-content-image" }
+wallrs-content-shader = { path = "../wallrs-content-shader" }
 wallrs-proto = { path = "../wallrs-proto" }
 wallrs-render = { path = "../wallrs-render" }
 wayland-client = { workspace = true }

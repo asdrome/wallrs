@@ -1,0 +1,6 @@
+[wallpaper]
+type = "shader"
+name = "shadertoy-plasma"
+
+[shader]
+entry = "plasma.glsl"

@@ -118,6 +118,8 @@ fn default_pan_axis() -> String {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ShaderConfig {
     pub entry: PathBuf,
+    #[serde(default)]
+    pub uniforms: std::collections::HashMap<String, f32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
