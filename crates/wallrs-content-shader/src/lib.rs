@@ -53,12 +53,25 @@ struct ShaderUniforms {
     custom0: f32,
     custom1: f32,
     custom2: f32,
+    audio_bass: f32,
+    audio_mid: f32,
+    audio_treble: f32,
+    audio_volume: f32,
+    audio_spectrum: array<vec4<f32>, 8>,
 };
 
 @group(0) @binding(0)
 var<uniform> u_params: ShaderUniforms;
+
+fn get_audio_band(idx: u32) -> f32 {
+    let clamped_idx = min(idx, 31u);
+    let vec_idx = clamped_idx / 4u;
+    let comp_idx = clamped_idx % 4u;
+    return u_params.audio_spectrum[vec_idx][comp_idx];
+}
 "#;
 
+#[allow(clippy::too_many_arguments)]
 fn uniform_bytes(
     resolution: [f32; 2],
     time: f32,
@@ -66,8 +79,10 @@ fn uniform_bytes(
     mouse: [f32; 4],
     frame: u32,
     custom: [f32; 3],
-) -> [u8; 48] {
-    let mut bytes = [0u8; 48];
+    audio: &wallrs_audio::AudioMetrics,
+    spectrum: Option<&[f32]>,
+) -> [u8; 192] {
+    let mut bytes = [0u8; 192];
     bytes[0..4].copy_from_slice(&resolution[0].to_ne_bytes());
     bytes[4..8].copy_from_slice(&resolution[1].to_ne_bytes());
     bytes[8..12].copy_from_slice(&time.to_ne_bytes());
@@ -80,6 +95,18 @@ fn uniform_bytes(
     bytes[36..40].copy_from_slice(&custom[0].to_ne_bytes());
     bytes[40..44].copy_from_slice(&custom[1].to_ne_bytes());
     bytes[44..48].copy_from_slice(&custom[2].to_ne_bytes());
+    bytes[48..52].copy_from_slice(&audio.bass.to_ne_bytes());
+    bytes[52..56].copy_from_slice(&audio.mid.to_ne_bytes());
+    bytes[56..60].copy_from_slice(&audio.treble.to_ne_bytes());
+    bytes[60..64].copy_from_slice(&audio.volume.to_ne_bytes());
+
+    if let Some(spec) = spectrum {
+        let count = spec.len().min(32);
+        for (i, &band) in spec.iter().enumerate().take(count) {
+            let offset = 64 + i * 4;
+            bytes[offset..offset + 4].copy_from_slice(&band.to_ne_bytes());
+        }
+    }
     bytes
 }
 
@@ -97,12 +124,27 @@ layout(std140, set = 0, binding = 0) uniform UniformBlock {
     float u_custom0;
     float u_custom1;
     float u_custom2;
+    float audio_bass;
+    float audio_mid;
+    float audio_treble;
+    float audio_volume;
+    vec4 audio_spectrum[8];
 };
 
 #define iResolution vec3(iResolution2D, 1.0)
+#define iBass audio_bass
+#define iMid audio_mid
+#define iTreble audio_treble
+#define iVolume audio_volume
+
+float get_audio_band(uint idx) {
+    uint clamped = min(idx, 31u);
+    uint vec_idx = clamped / 4u;
+    uint comp_idx = clamped % 4u;
+    return audio_spectrum[vec_idx][comp_idx];
+}
 
 layout(location = 0) out vec4 _outColor;
-
 "#;
 
     let epilogue = r#"
@@ -340,10 +382,20 @@ impl WallpaperRenderer for ShaderRenderer {
             cache: None,
         });
 
-        let init_raw = uniform_bytes([1920.0, 1080.0], 0.0, 0.016, [0.0; 4], 0, [0.0, 0.0, 0.0]);
+        let default_audio = wallrs_audio::AudioMetrics::default();
+        let init_raw = uniform_bytes(
+            [1920.0, 1080.0],
+            0.0,
+            0.016,
+            [0.0; 4],
+            0,
+            [0.0, 0.0, 0.0],
+            &default_audio,
+            None,
+        );
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("shader_uniform_buffer"),
-            size: 48,
+            size: 192,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -393,7 +445,20 @@ impl WallpaperRenderer for ShaderRenderer {
         let c1 = self.custom_uniforms.get("custom1").copied().unwrap_or(0.0);
         let c2 = self.custom_uniforms.get("custom2").copied().unwrap_or(0.0);
 
-        let raw = uniform_bytes(res, time, dt, mouse, self.frame_count, [c0, c1, c2]);
+        let audio_metrics = ctx
+            .spectrum
+            .map(wallrs_audio::AudioMetrics::from_spectrum)
+            .unwrap_or_default();
+        let raw = uniform_bytes(
+            res,
+            time,
+            dt,
+            mouse,
+            self.frame_count,
+            [c0, c1, c2],
+            &audio_metrics,
+            ctx.spectrum,
+        );
         ctx.queue.write_buffer(uniform_buffer, 0, &raw);
     }
 
@@ -449,6 +514,17 @@ mod tests {
 
     #[test]
     fn test_uniform_bytes_layout() {
+        let metrics = wallrs_audio::AudioMetrics {
+            bass: 0.95,
+            mid: 0.55,
+            treble: 0.25,
+            volume: 0.60,
+        };
+        let mut bands = [0.0f32; 32];
+        bands[0] = 0.95;
+        bands[15] = 0.55;
+        bands[31] = 0.25;
+
         let bytes = uniform_bytes(
             [1920.0, 1080.0],
             10.5,
@@ -456,20 +532,36 @@ mod tests {
             [100.0, 200.0, 0.0, 0.0],
             42,
             [1.23, 4.56, 7.89],
+            &metrics,
+            Some(&bands),
         );
-        assert_eq!(bytes.len(), 48);
+        assert_eq!(bytes.len(), 192);
 
         let w = f32::from_ne_bytes(bytes[0..4].try_into().unwrap());
         let h = f32::from_ne_bytes(bytes[4..8].try_into().unwrap());
         let time = f32::from_ne_bytes(bytes[8..12].try_into().unwrap());
         let frame = u32::from_ne_bytes(bytes[32..36].try_into().unwrap());
         let c0 = f32::from_ne_bytes(bytes[36..40].try_into().unwrap());
+        let bass = f32::from_ne_bytes(bytes[48..52].try_into().unwrap());
+        let mid = f32::from_ne_bytes(bytes[52..56].try_into().unwrap());
+        let treble = f32::from_ne_bytes(bytes[56..60].try_into().unwrap());
+        let vol = f32::from_ne_bytes(bytes[60..64].try_into().unwrap());
+        let b0 = f32::from_ne_bytes(bytes[64..68].try_into().unwrap());
+        let b15 = f32::from_ne_bytes(bytes[64 + 15 * 4..64 + 16 * 4].try_into().unwrap());
+        let b31 = f32::from_ne_bytes(bytes[64 + 31 * 4..64 + 32 * 4].try_into().unwrap());
 
         assert_eq!(w, 1920.0);
         assert_eq!(h, 1080.0);
         assert_eq!(time, 10.5);
         assert_eq!(frame, 42);
         assert!((c0 - 1.23).abs() < 1e-5);
+        assert_eq!(bass, 0.95);
+        assert_eq!(mid, 0.55);
+        assert_eq!(treble, 0.25);
+        assert_eq!(vol, 0.60);
+        assert_eq!(b0, 0.95);
+        assert_eq!(b15, 0.55);
+        assert_eq!(b31, 0.25);
     }
 
     #[test]
@@ -540,5 +632,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             translate_shadertoy_glsl_to_wgsl(renderer_tunnel.raw_source.as_ref().unwrap())
                 .expect("tunnel GLSL translates cleanly to WGSL");
         assert!(wgsl_tunnel.contains("fn main("));
+
+        let visualizer_toml = manifest_dir.join("examples/audio-visualizer/wallpaper.toml");
+        let manifest_vis =
+            WallpaperManifest::from_file(&visualizer_toml).expect("read visualizer manifest");
+        let renderer_vis =
+            ShaderRenderer::from_manifest(&manifest_vis, visualizer_toml.parent().unwrap())
+                .expect("visualizer renderer creation");
+        assert!(!renderer_vis.is_glsl);
+        assert!(renderer_vis.raw_source.is_some());
+
+        let wgsl_source = renderer_vis.raw_source.as_ref().unwrap();
+        let module =
+            naga::front::wgsl::parse_str(wgsl_source).expect("visualizer WGSL parse failed");
+        let mut validator = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::empty(),
+        );
+        validator
+            .validate(&module)
+            .expect("visualizer Naga WGSL validation failed");
     }
 }

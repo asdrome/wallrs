@@ -8,6 +8,7 @@ license.workspace = true
 naga = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+wallrs-audio = { path = "../wallrs-audio" }
 wallrs-proto = { path = "../wallrs-proto" }
 wallrs-render = { path = "../wallrs-render" }
 wgpu = { workspace = true }

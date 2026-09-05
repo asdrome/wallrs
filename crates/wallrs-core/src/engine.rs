@@ -73,6 +73,7 @@ pub struct EngineState {
     pub wgpu_queue: wgpu::Queue,
     pub outputs: HashMap<ObjectId, OutputSurface>,
     pub renderer_factory: Arc<dyn Fn() -> Box<dyn WallpaperRenderer>>,
+    pub audio_handle: Option<wallrs_audio::SpectrumHandle>,
     pub exit: bool,
 }
 
@@ -156,7 +157,8 @@ impl OutputHandler for EngineState {
         layer_surface.commit();
 
         let surface_id = layer_surface.wl_surface().id();
-        let output_surface = OutputSurface::new(name, output, layer_surface);
+        let mut output_surface = OutputSurface::new(name, output, layer_surface);
+        output_surface.audio_handle = self.audio_handle.clone();
         self.outputs.insert(surface_id, output_surface);
     }
 
@@ -402,6 +404,21 @@ impl Engine {
         let ipc_listener = ipc::bind_socket(&socket_path)?;
         ipc::register_ipc_source(event_loop.handle(), ipc_listener)?;
 
+        // Initialize PipeWire audio capture (falls back gracefully to silent mode if unavailable)
+        let audio_handle = match wallrs_audio::spawn_capture(32) {
+            Ok((handle, _thread)) => {
+                tracing::info!("PipeWire audio capture initialized (32 frequency bands)");
+                Some(handle)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = ?e,
+                    "PipeWire audio capture unavailable; running in silent mode"
+                );
+                None
+            }
+        };
+
         let state = EngineState {
             qh,
             registry_state,
@@ -416,6 +433,7 @@ impl Engine {
             wgpu_queue,
             outputs: HashMap::new(),
             renderer_factory: Arc::new(renderer_factory),
+            audio_handle,
             exit: false,
         };
 

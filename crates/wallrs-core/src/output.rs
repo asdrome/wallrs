@@ -40,6 +40,7 @@ pub struct OutputSurface {
     pub start_time: Instant,
     pub last_frame_time: Option<Instant>,
     pub cursor_position: Option<(f32, f32)>,
+    pub audio_handle: Option<wallrs_audio::SpectrumHandle>,
 }
 
 /// Bundles WGPU rendering context references passed to output configuration.
@@ -70,6 +71,7 @@ impl OutputSurface {
             start_time: Instant::now(),
             last_frame_time: None,
             cursor_position: None,
+            audio_handle: None,
         }
     }
 
@@ -224,12 +226,15 @@ impl OutputSurface {
             label: Some("output_frame_encoder"),
         });
 
+        let spectrum_arc = self.audio_handle.as_ref().map(|h| h.latest());
+        let spectrum = spectrum_arc.as_deref().map(|v| v.as_slice());
+
         let ctx = FrameContext {
             elapsed,
             delta,
             output_size: (self.width, self.height),
             pointer: self.cursor_position,
-            spectrum: None,
+            spectrum,
             device,
             queue,
         };

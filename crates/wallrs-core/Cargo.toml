@@ -13,6 +13,7 @@ serde_json = { workspace = true }
 smithay-client-toolkit = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+wallrs-audio = { path = "../wallrs-audio" }
 wallrs-content-image = { path = "../wallrs-content-image" }
 wallrs-content-shader = { path = "../wallrs-content-shader" }
 wallrs-proto = { path = "../wallrs-proto" }
