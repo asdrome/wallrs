@@ -1,0 +1,10 @@
+[package]
+name = "wallrs-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+wallrs-proto = { path = "../wallrs-proto" }
+wgpu = { workspace = true }

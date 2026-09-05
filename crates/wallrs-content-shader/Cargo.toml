@@ -1,0 +1,9 @@
+[package]
+name = "wallrs-content-shader"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wallrs-render = { path = "../wallrs-render" }
+wgpu = { workspace = true }

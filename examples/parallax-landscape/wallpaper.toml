@@ -1,0 +1,11 @@
+[wallpaper]
+type = "image"
+name = "parallax-landscape"
+
+[[image.layers]]
+path = "bg.png"
+
+[[image.layers]]
+path = "fg.png"
+parallax = 0.5
+pan = { speed = 0.005, axis = "x" }

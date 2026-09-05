@@ -1,0 +1,15 @@
+[package]
+name = "wallrs-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "wallctl"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+wallrs-proto = { path = "../wallrs-proto" }

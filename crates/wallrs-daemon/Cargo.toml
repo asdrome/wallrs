@@ -1,0 +1,20 @@
+[package]
+name = "wallrs-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "wallrsd"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+wallrs-audio = { path = "../wallrs-audio" }
+wallrs-content-image = { path = "../wallrs-content-image" }
+wallrs-content-shader = { path = "../wallrs-content-shader" }
+wallrs-content-video = { path = "../wallrs-content-video" }
+wallrs-core = { path = "../wallrs-core" }
+wallrs-render = { path = "../wallrs-render" }
