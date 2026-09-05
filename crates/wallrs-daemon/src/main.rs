@@ -13,6 +13,14 @@ struct Args {
     /// Solid background color in hex format (e.g. '#0f172a', '#1e293b') or comma-separated RGBA (0.0-1.0)
     #[arg(short, long, default_value = "#0f172a")]
     color: String,
+
+    /// Maximum frames-per-second render ceiling (default: unlimited, synced to display refresh rate)
+    #[arg(long)]
+    fps: Option<u32>,
+
+    /// Disable automatic pausing of wallpaper rendering when a window is in fullscreen
+    #[arg(long)]
+    no_fullscreen_pause: bool,
 }
 
 fn parse_color(s: &str) -> Result<[f32; 4], String> {
@@ -79,10 +87,21 @@ fn main() {
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
         color = ?initial_color,
+        fps = ?args.fps,
+        fullscreen_pause = !args.no_fullscreen_pause,
         "Initializing wallrsd live wallpaper daemon"
     );
 
-    let mut engine = match Engine::new(move || Box::new(SolidColorRenderer::new(initial_color))) {
+    let config = wallrs_core::EngineConfig {
+        socket_path: None,
+        max_fps: args.fps,
+        fullscreen_pause: !args.no_fullscreen_pause,
+    };
+
+    let mut engine = match Engine::with_config(
+        move || Box::new(SolidColorRenderer::new(initial_color)),
+        config,
+    ) {
         Ok(engine) => engine,
         Err(EngineError::LayerShellNotSupported) => {
             tracing::error!(
@@ -125,5 +144,22 @@ mod tests {
         let c8 = parse_color("#00ff0080").unwrap();
         assert!((c8[1] - 1.0).abs() < 1e-4);
         assert!((c8[3] - 0.5019).abs() < 1e-3);
+    }
+
+    #[test]
+    fn test_daemon_args_parse() {
+        let args = Args::try_parse_from([
+            "wallrsd",
+            "--color",
+            "#123456",
+            "--fps",
+            "60",
+            "--no-fullscreen-pause",
+        ])
+        .unwrap();
+
+        assert_eq!(args.color, "#123456");
+        assert_eq!(args.fps, Some(60));
+        assert!(args.no_fullscreen_pause);
     }
 }

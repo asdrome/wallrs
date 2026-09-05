@@ -334,10 +334,11 @@ Deliberadamente plano: no hay tipos de propiedad genéricos (`slider`, `combolis
 - **Criterio de aceptación:** reproducir un `.mp4` en loop sin drift audible de audio/video perceptible en 10 minutos continuos, en al menos un monitor 1080p60.
 
 ### Fase 7 — Fullscreen-pause + límites de FPS + screenshot
-- [ ] Detector vía `zwlr_foreign_toplevel_management_v1`.
-- [ ] `--fps` como techo, no como disparador.
-- [ ] `wallctl screenshot` genera PNG del frame actual de un output.
+- [x] Detector vía `zwlr_foreign_toplevel_management_v1`.
+- [x] `--fps` como techo, no como disparador.
+- [x] `wallctl screenshot` genera PNG del frame actual de un output.
 - **Criterio de aceptación:** abrir un juego a pantalla completa y verificar que el uso de CPU/GPU de `wallrsd` cae a ~0 mientras dura.
+
 
 ### Fase 8 — Empaquetado y documentación
 - [ ] Paquete AUR (o Nix flake), README con matriz de compositores probados, ejemplos de manifiestos.

@@ -112,7 +112,7 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                     name: out.name.clone().unwrap_or_else(|| "unknown".into()),
                     width: out.width,
                     height: out.height,
-                    paused: out.paused,
+                    paused: out.is_paused(),
                 })
                 .collect();
             Response::Outputs(list)
@@ -378,8 +378,166 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
             }
         }
 
-        Command::Screenshot { .. } => {
-            Response::Error("Screenshot will be supported in Phase 7".into())
+        Command::Screenshot { output, path } => {
+            let Some(out) = state
+                .outputs
+                .values_mut()
+                .find(|o| o.name.as_deref() == Some(output.as_str()))
+            else {
+                return Response::Error(format!("Output not found: {output}"));
+            };
+
+            let Some(renderer) = &mut out.renderer else {
+                return Response::Error(format!("Output '{output}' has no active renderer"));
+            };
+
+            let width = out.width;
+            let height = out.height;
+            if width == 0 || height == 0 {
+                return Response::Error(format!("Output '{output}' has invalid dimensions"));
+            }
+
+            let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+            let bytes_per_pixel = 4u32;
+            let unpadded_bytes_per_row = width * bytes_per_pixel;
+            let padded_bytes_per_row = unpadded_bytes_per_row.div_ceil(align) * align;
+            let buffer_size = (padded_bytes_per_row * height) as wgpu::BufferAddress;
+
+            let capture_texture = state.wgpu_device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("screenshot_capture_texture"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+
+            let output_buffer = state.wgpu_device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("screenshot_staging_buffer"),
+                size: buffer_size,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+
+            let view = capture_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let mut encoder =
+                state
+                    .wgpu_device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("screenshot_encoder"),
+                    });
+
+            let now = std::time::Instant::now();
+            let elapsed = now.duration_since(out.start_time);
+            let delta = out
+                .last_frame_time
+                .map_or(std::time::Duration::from_millis(16), |l| {
+                    now.duration_since(l)
+                });
+            let spectrum_arc = out.audio_handle.as_ref().map(|h| h.latest());
+            let spectrum = spectrum_arc.as_deref().map(|v| v.as_slice());
+
+            let ctx = wallrs_render::FrameContext {
+                elapsed,
+                delta,
+                output_size: (width, height),
+                pointer: out.cursor_position,
+                spectrum,
+                device: &state.wgpu_device,
+                queue: &state.wgpu_queue,
+            };
+
+            renderer.update(&ctx);
+            renderer.render(&mut encoder, &view);
+
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &capture_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &output_buffer,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(padded_bytes_per_row),
+                        rows_per_image: Some(height),
+                    },
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+
+            state.wgpu_queue.submit(Some(encoder.finish()));
+
+            // Map buffer and read back pixel data
+            let buffer_slice = output_buffer.slice(..);
+            let (tx, rx) = std::sync::mpsc::channel();
+            buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
+                let _ = tx.send(res);
+            });
+
+            if let Err(e) = state.wgpu_device.poll(wgpu::PollType::wait_indefinitely()) {
+                return Response::Error(format!("Failed waiting for GPU screenshot readback: {e}"));
+            }
+
+            match rx.recv() {
+                Ok(Ok(())) => {
+                    let mapped_range = match buffer_slice.get_mapped_range() {
+                        Ok(v) => v,
+                        Err(e) => {
+                            return Response::Error(format!("Failed to get mapped range: {e}"));
+                        }
+                    };
+                    let mut unpadded_bytes =
+                        Vec::with_capacity((width * height * bytes_per_pixel) as usize);
+
+                    for row in mapped_range.chunks(padded_bytes_per_row as usize) {
+                        unpadded_bytes
+                            .extend_from_slice(&row[..(width * bytes_per_pixel) as usize]);
+                    }
+
+                    drop(mapped_range);
+                    output_buffer.unmap();
+
+                    // Create parent directory if needed
+                    if let Some(parent) = path.parent()
+                        && !parent.as_os_str().is_empty()
+                        && !parent.exists()
+                        && let Err(e) = std::fs::create_dir_all(parent)
+                    {
+                        return Response::Error(format!(
+                            "Failed to create directory {parent:?}: {e}"
+                        ));
+                    }
+
+                    if let Err(e) = image::save_buffer(
+                        &path,
+                        &unpadded_bytes,
+                        width,
+                        height,
+                        image::ExtendedColorType::Rgba8,
+                    ) {
+                        return Response::Error(format!(
+                            "Failed to save screenshot to {path:?}: {e}"
+                        ));
+                    }
+
+                    Response::Ok
+                }
+                Ok(Err(e)) => Response::Error(format!("Buffer mapping failed: {e}")),
+                Err(_) => Response::Error("Channel disconnected while mapping buffer".into()),
+            }
         }
     }
 }
@@ -417,5 +575,16 @@ mod tests {
         let listener2 = bind_socket(&sock_path).expect("failed to clean stale socket and rebind");
         drop(listener2);
         let _ = std::fs::remove_file(&sock_path);
+    }
+
+    #[test]
+    fn test_command_screenshot_roundtrip() {
+        let cmd = Command::Screenshot {
+            output: "eDP-1".into(),
+            path: PathBuf::from("/tmp/shot.png"),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let parsed: Command = serde_json::from_str(&json).unwrap();
+        assert_eq!(cmd, parsed);
     }
 }

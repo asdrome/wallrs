@@ -36,9 +36,12 @@ pub struct OutputSurface {
     pub width: u32,
     pub height: u32,
     pub configured: bool,
-    pub paused: bool,
+    pub manual_paused: bool,
+    pub fullscreen_paused: bool,
+    pub max_fps: Option<u32>,
     pub start_time: Instant,
     pub last_frame_time: Option<Instant>,
+    pub last_rendered_frame_time: Option<Instant>,
     pub cursor_position: Option<(f32, f32)>,
     pub audio_handle: Option<wallrs_audio::SpectrumHandle>,
 }
@@ -56,6 +59,7 @@ impl OutputSurface {
         name: Option<String>,
         wl_output: wl_output::WlOutput,
         layer_surface: LayerSurface,
+        max_fps: Option<u32>,
     ) -> Self {
         Self {
             name,
@@ -67,12 +71,20 @@ impl OutputSurface {
             width: 0,
             height: 0,
             configured: false,
-            paused: false,
+            manual_paused: false,
+            fullscreen_paused: false,
+            max_fps,
             start_time: Instant::now(),
             last_frame_time: None,
+            last_rendered_frame_time: None,
             cursor_position: None,
             audio_handle: None,
         }
+    }
+
+    /// Returns true if this output is paused either manually or by a fullscreen window.
+    pub fn is_paused(&self) -> bool {
+        self.manual_paused || self.fullscreen_paused
     }
 
     /// Handles compositor configure event.
@@ -175,8 +187,27 @@ impl OutputSurface {
         queue: &wgpu::Queue,
         qh: &QueueHandle<EngineState>,
     ) {
-        if self.paused || !self.configured {
+        if self.is_paused() || !self.configured {
             return;
+        }
+
+        let now = Instant::now();
+
+        // Enforce max FPS limit as an upper ceiling without replacing the Wayland frame-callback trigger
+        if let Some(fps) = self.max_fps
+            && fps > 0
+            && let Some(last_render) = self.last_rendered_frame_time
+        {
+            let min_interval = Duration::from_secs_f64(1.0 / fps as f64);
+            if now.duration_since(last_render) < min_interval {
+                // Skip render and re-register frame callback for next compositor vblank
+                self.layer_surface.wl_surface().frame(
+                    qh,
+                    FrameCallbackData(self.layer_surface.wl_surface().clone()),
+                );
+                self.layer_surface.commit();
+                return;
+            }
         }
 
         let (Some(surface), Some(renderer)) = (&self.wgpu_surface, &mut self.renderer) else {
@@ -207,12 +238,11 @@ impl OutputSurface {
             }
             wgpu::CurrentSurfaceTexture::Validation => {
                 tracing::error!(output = ?self.name, "Surface validation error; pausing output");
-                self.paused = true;
+                self.manual_paused = true;
                 return;
             }
         };
 
-        let now = Instant::now();
         let elapsed = now.duration_since(self.start_time);
         let delta = self
             .last_frame_time
@@ -250,12 +280,13 @@ impl OutputSurface {
                 output = ?self.name,
                 "Panic occurred while rendering output. Pausing this output to preserve daemon stability."
             );
-            self.paused = true;
+            self.manual_paused = true;
             return;
         }
 
         queue.submit(Some(encoder.finish()));
         queue.present(surface_texture);
+        self.last_rendered_frame_time = Some(now);
 
         // Request next frame callback to adhere to display refresh rate
         self.layer_surface.wl_surface().frame(
@@ -282,7 +313,7 @@ impl OutputSurface {
             old.teardown();
         }
         self.renderer = Some(renderer);
-        if self.configured && !self.paused {
+        if self.configured && !self.is_paused() {
             self.render_frame(gpu.device, gpu.queue, qh);
         }
         Ok(())
@@ -300,7 +331,7 @@ impl OutputSurface {
                 .set_property(key, value)
                 .map_err(|e| OutputError::Renderer(e.to_string()))?;
         }
-        if self.configured && !self.paused {
+        if self.configured && !self.is_paused() {
             self.layer_surface.wl_surface().frame(
                 qh,
                 FrameCallbackData(self.layer_surface.wl_surface().clone()),
@@ -310,18 +341,38 @@ impl OutputSurface {
         Ok(())
     }
 
-    /// Sets the paused state of this output.
+    /// Sets the manual paused state of this output (e.g., from `wallctl pause`).
     /// If resuming from a paused state, commits a new frame callback to wake up rendering.
-    pub fn set_paused(&mut self, paused: bool, qh: &QueueHandle<EngineState>) {
-        let was_paused = self.paused;
-        self.paused = paused;
-        if was_paused && !paused && self.configured {
+    pub fn set_manual_paused(&mut self, paused: bool, qh: &QueueHandle<EngineState>) {
+        let was_paused = self.is_paused();
+        self.manual_paused = paused;
+        let is_paused = self.is_paused();
+        if was_paused && !is_paused && self.configured {
             self.layer_surface.wl_surface().frame(
                 qh,
                 FrameCallbackData(self.layer_surface.wl_surface().clone()),
             );
             self.layer_surface.commit();
         }
+    }
+
+    /// Sets the fullscreen paused state of this output (triggered automatically when a window becomes fullscreen).
+    pub fn set_fullscreen_paused(&mut self, paused: bool, qh: &QueueHandle<EngineState>) {
+        let was_paused = self.is_paused();
+        self.fullscreen_paused = paused;
+        let is_paused = self.is_paused();
+        if was_paused && !is_paused && self.configured {
+            self.layer_surface.wl_surface().frame(
+                qh,
+                FrameCallbackData(self.layer_surface.wl_surface().clone()),
+            );
+            self.layer_surface.commit();
+        }
+    }
+
+    /// Convenience wrapper for manual pause.
+    pub fn set_paused(&mut self, paused: bool, qh: &QueueHandle<EngineState>) {
+        self.set_manual_paused(paused, qh);
     }
 
     /// Teardown when output is unplugged/destroyed.

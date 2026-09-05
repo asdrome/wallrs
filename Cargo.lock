@@ -1871,6 +1871,7 @@ name = "wallrs-core"
 version = "0.1.0"
 dependencies = [
  "calloop",
+ "image",
  "pollster",
  "raw-window-handle",
  "serde",
@@ -1885,6 +1886,7 @@ dependencies = [
  "wallrs-proto",
  "wallrs-render",
  "wayland-client",
+ "wayland-protocols-wlr",
  "wgpu",
 ]
 

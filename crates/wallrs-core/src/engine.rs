@@ -17,15 +17,19 @@ use smithay_client_toolkit::{
         },
     },
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use thiserror::Error;
 use wayland_client::{
-    Connection, Proxy, QueueHandle,
+    Connection, Dispatch, Proxy, QueueHandle,
     backend::ObjectId,
     globals::registry_queue_init,
     protocol::{wl_output, wl_pointer, wl_seat, wl_surface},
+};
+use wayland_protocols_wlr::foreign_toplevel::v1::client::{
+    zwlr_foreign_toplevel_handle_v1::{self, ZwlrForeignToplevelHandleV1},
+    zwlr_foreign_toplevel_manager_v1::{self, ZwlrForeignToplevelManagerV1},
 };
 
 use crate::ipc::{self, IpcError};
@@ -58,6 +62,14 @@ pub enum EngineError {
     Ipc(#[from] IpcError),
 }
 
+/// Tracks the state of an open toplevel window for automatic fullscreen detection.
+pub struct ToplevelData {
+    pub handle: ZwlrForeignToplevelHandleV1,
+    pub outputs: HashSet<u32>,
+    pub is_fullscreen: bool,
+    pub pending_fullscreen: Option<bool>,
+}
+
 /// Holds all state managed by the Wayland and render event loop.
 pub struct EngineState {
     pub qh: QueueHandle<EngineState>,
@@ -74,6 +86,10 @@ pub struct EngineState {
     pub outputs: HashMap<ObjectId, OutputSurface>,
     pub renderer_factory: Arc<dyn Fn() -> Box<dyn WallpaperRenderer>>,
     pub audio_handle: Option<wallrs_audio::SpectrumHandle>,
+    pub max_fps: Option<u32>,
+    pub fullscreen_pause: bool,
+    pub toplevel_manager: Option<ZwlrForeignToplevelManagerV1>,
+    pub toplevels: HashMap<ObjectId, ToplevelData>,
     pub exit: bool,
 }
 
@@ -157,7 +173,7 @@ impl OutputHandler for EngineState {
         layer_surface.commit();
 
         let surface_id = layer_surface.wl_surface().id();
-        let mut output_surface = OutputSurface::new(name, output, layer_surface);
+        let mut output_surface = OutputSurface::new(name, output, layer_surface, self.max_fps);
         output_surface.audio_handle = self.audio_handle.clone();
         self.outputs.insert(surface_id, output_surface);
     }
@@ -312,6 +328,113 @@ impl ProvidesRegistryState for EngineState {
 delegate_registry!(EngineState);
 delegate_dispatch2!(EngineState);
 
+impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for EngineState {
+    fn event(
+        state: &mut Self,
+        _proxy: &ZwlrForeignToplevelManagerV1,
+        event: zwlr_foreign_toplevel_manager_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwlr_foreign_toplevel_manager_v1::Event::Toplevel { toplevel } => {
+                let id = toplevel.id();
+                state.toplevels.insert(
+                    id,
+                    ToplevelData {
+                        handle: toplevel,
+                        outputs: HashSet::new(),
+                        is_fullscreen: false,
+                        pending_fullscreen: None,
+                    },
+                );
+            }
+            zwlr_foreign_toplevel_manager_v1::Event::Finished => {
+                state.toplevel_manager = None;
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for EngineState {
+    fn event(
+        state: &mut Self,
+        proxy: &ZwlrForeignToplevelHandleV1,
+        event: zwlr_foreign_toplevel_handle_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        let id = proxy.id();
+        match event {
+            zwlr_foreign_toplevel_handle_v1::Event::OutputEnter { output } => {
+                if let Some(data) = state.toplevels.get_mut(&id) {
+                    data.outputs.insert(output.id().protocol_id());
+                }
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::OutputLeave { output } => {
+                if let Some(data) = state.toplevels.get_mut(&id) {
+                    data.outputs.remove(&output.id().protocol_id());
+                }
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::State { state: state_bytes } => {
+                if let Some(data) = state.toplevels.get_mut(&id) {
+                    // Enum entry 3 corresponds to Fullscreen
+                    let is_fullscreen = state_bytes
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .any(|chunk| u32::from_ne_bytes(*chunk) == 3);
+                    data.pending_fullscreen = Some(is_fullscreen);
+                }
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::Done => {
+                let mut changed = false;
+                if let Some(data) = state.toplevels.get_mut(&id)
+                    && let Some(fs) = data.pending_fullscreen.take()
+                    && data.is_fullscreen != fs
+                {
+                    data.is_fullscreen = fs;
+                    changed = true;
+                }
+                if changed && state.fullscreen_pause {
+                    state.update_fullscreen_pause();
+                }
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::Closed => {
+                if let Some(data) = state.toplevels.remove(&id) {
+                    data.handle.destroy();
+                    if data.is_fullscreen && state.fullscreen_pause {
+                        state.update_fullscreen_pause();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl EngineState {
+    /// Recalculates fullscreen pause status for all active outputs.
+    pub fn update_fullscreen_pause(&mut self) {
+        let mut fullscreen_outputs = HashSet::new();
+        for toplevel in self.toplevels.values() {
+            if toplevel.is_fullscreen {
+                for &out_id in &toplevel.outputs {
+                    fullscreen_outputs.insert(out_id);
+                }
+            }
+        }
+
+        for out in self.outputs.values_mut() {
+            let should_pause = fullscreen_outputs.contains(&out.wl_output.id().protocol_id());
+            out.set_fullscreen_paused(should_pause, &self.qh);
+        }
+    }
+}
+
 /// Main engine runner orchestrating Wayland, Calloop, WGPU, and IPC socket server.
 pub struct Engine {
     pub conn: Connection,
@@ -321,12 +444,12 @@ pub struct Engine {
 }
 
 impl Engine {
-    /// Creates an engine with the default socket path.
+    /// Creates an engine with the default socket path and standard configuration.
     pub fn new<F>(renderer_factory: F) -> Result<Self, EngineError>
     where
         F: Fn() -> Box<dyn WallpaperRenderer> + 'static,
     {
-        Self::with_socket(renderer_factory, wallrs_proto::default_socket_path())
+        Self::with_config(renderer_factory, crate::EngineConfig::default())
     }
 
     /// Creates an engine with a custom IPC socket path.
@@ -334,6 +457,29 @@ impl Engine {
     where
         F: Fn() -> Box<dyn WallpaperRenderer> + 'static,
     {
+        Self::with_config(
+            renderer_factory,
+            crate::EngineConfig {
+                socket_path: Some(socket_path),
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Creates an engine with full custom configuration.
+    pub fn with_config<F>(
+        renderer_factory: F,
+        config: crate::EngineConfig,
+    ) -> Result<Self, EngineError>
+    where
+        F: Fn() -> Box<dyn WallpaperRenderer> + 'static,
+    {
+        let socket_path = config
+            .socket_path
+            .unwrap_or_else(wallrs_proto::default_socket_path);
+        let max_fps = config.max_fps;
+        let fullscreen_pause = config.fullscreen_pause;
+
         tracing::info!("Connecting to Wayland display");
         let conn = Connection::connect_to_env()
             .map_err(|e| EngineError::WaylandConnection(e.to_string()))?;
@@ -359,6 +505,31 @@ impl Engine {
 
         let output_state = OutputState::new(&globals, &qh);
         let registry_state = RegistryState::new(&globals);
+
+        let toplevel_manager = if fullscreen_pause {
+            match registry_state.bind_one::<ZwlrForeignToplevelManagerV1, EngineState, ()>(
+                &qh,
+                1..=3,
+                (),
+            ) {
+                Ok(mgr) => {
+                    tracing::info!(
+                        "zwlr_foreign_toplevel_manager_v1 bound; automatic fullscreen pause active"
+                    );
+                    Some(mgr)
+                }
+                Err(e) => {
+                    tracing::info!(
+                        error = ?e,
+                        "zwlr_foreign_toplevel_manager_v1 not available; running without fullscreen pause"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         let mut seat_state = SeatState::new(&globals, &qh);
         let mut pointers = Vec::new();
         for seat in seat_state.seats() {
@@ -434,6 +605,10 @@ impl Engine {
             outputs: HashMap::new(),
             renderer_factory: Arc::new(renderer_factory),
             audio_handle,
+            max_fps,
+            fullscreen_pause,
+            toplevel_manager,
+            toplevels: HashMap::new(),
             exit: false,
         };
 

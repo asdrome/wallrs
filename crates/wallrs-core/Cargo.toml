@@ -19,5 +19,9 @@ wallrs-content-shader = { path = "../wallrs-content-shader" }
 wallrs-content-video = { path = "../wallrs-content-video" }
 wallrs-proto = { path = "../wallrs-proto" }
 wallrs-render = { path = "../wallrs-render" }
+image = { workspace = true }
+
 wayland-client = { workspace = true }
+wayland-protocols-wlr = { workspace = true }
 wgpu = { workspace = true }
+

@@ -45,8 +45,20 @@ enum Subcommands {
     /// Load and display a wallpaper from a manifest folder or wallpaper.toml
     SetWallpaper(SetWallpaperArgs),
 
+    /// Take a screenshot of the current wallpaper on an output and save it to an image file
+    Screenshot(ScreenshotArgs),
+
     /// Gracefully terminate the wallrsd daemon
     Kill,
+}
+
+#[derive(Args, Debug)]
+struct ScreenshotArgs {
+    /// Target output name (e.g. "eDP-1")
+    output: String,
+
+    /// Destination file path (e.g. "screenshot.png")
+    path: PathBuf,
 }
 
 #[derive(Args, Debug)]
@@ -281,6 +293,13 @@ fn run() -> Result<(), String> {
                 false,
             )
         }
+        Subcommands::Screenshot(args) => (
+            Command::Screenshot {
+                output: args.output,
+                path: args.path,
+            },
+            false,
+        ),
         Subcommands::Kill => (Command::Kill, false),
     };
 
@@ -368,5 +387,17 @@ mod tests {
             parse_property_value("hello world"),
             PropertyValue::Text("hello world".into())
         );
+    }
+
+    #[test]
+    fn test_cli_parse_screenshot() {
+        let cli = Cli::try_parse_from(["wallctl", "screenshot", "eDP-1", "test.png"]).unwrap();
+        match cli.command {
+            Subcommands::Screenshot(args) => {
+                assert_eq!(args.output, "eDP-1");
+                assert_eq!(args.path, PathBuf::from("test.png"));
+            }
+            _ => panic!("Expected Subcommands::Screenshot"),
+        }
     }
 }
