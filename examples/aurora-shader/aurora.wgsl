@@ -12,6 +12,11 @@ struct ShaderUniforms {
     custom0: f32,
     custom1: f32,
     custom2: f32,
+    audio_bass: f32,
+    audio_mid: f32,
+    audio_treble: f32,
+    audio_volume: f32,
+    audio_spectrum: array<vec4<f32>, 8>,
 };
 
 @group(0) @binding(0)
@@ -29,12 +34,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         uv.y
     );
 
-    // Multi-layered undulating ribbons
+    // Multi-layered undulating ribbons modulated by audio
+    let audio_boost = 1.0 + u_params.audio_bass * 1.5;
     for (var i = 1.0; i <= 3.0; i += 1.0) {
         let wave = sin(uv.x * (2.5 * i) + t * (0.8 * i)) * 0.18
                  + cos(uv.x * (1.2 * i) - t * 0.5) * 0.12;
         let dist = abs(uv.y - (0.45 + wave));
-        let glow = exp(-dist * (12.0 + i * 4.0));
+        let glow = exp(-dist * (12.0 + i * 4.0)) * audio_boost;
 
         let aurora_color = vec3<f32>(
             0.1 * i + 0.1 * sin(t + i),

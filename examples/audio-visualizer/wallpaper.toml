@@ -1,0 +1,9 @@
+[wallpaper]
+type = "shader"
+name = "audio-visualizer"
+
+[shader]
+entry = "visualizer.wgsl"
+
+[shader.uniforms]
+custom0 = 1.0
