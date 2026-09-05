@@ -325,12 +325,12 @@ Deliberadamente plano: no hay tipos de propiedad genéricos (`slider`, `combolis
 - **Criterio de aceptación:** correr 3 shaders públicos de Shadertoy (de un solo buffer) sin modificarlos más que pegar el código fuente.
 
 ### Fase 5 — Audio PipeWire
-- [ ] `wallrs-audio` capturando el monitor del sink por defecto, FFT, `SpectrumHandle`.
-- [ ] Wiring del espectro hacia `wallrs-content-shader` (textura de espectro) y opcionalmente hacia `wallrs-content-image` (ej. escala de una capa según graves).
+- [x] `wallrs-audio` capturando el monitor del sink por defecto, FFT, `SpectrumHandle`.
+- [x] Wiring del espectro hacia `wallrs-content-shader` (textura de espectro) y opcionalmente hacia `wallrs-content-image` (ej. escala de una capa según graves).
 - **Criterio de aceptación:** test unitario de `rustfft` + bucketing contra una señal seno conocida (verificar que el pico cae en la banda esperada). Test manual: reproducir música y ver el shader reaccionar.
 
 ### Fase 6 — Content-type video
-- [ ] `wallrs-content-video` vía `libmpv2` en modo software, subida de frames a wgpu.
+- [x] `wallrs-content-video` vía `libmpv2` en modo software, subida de frames a wgpu.
 - **Criterio de aceptación:** reproducir un `.mp4` en loop sin drift audible de audio/video perceptible en 10 minutos continuos, en al menos un monitor 1080p60.
 
 ### Fase 7 — Fullscreen-pause + límites de FPS + screenshot

@@ -16,6 +16,7 @@ tracing = { workspace = true }
 wallrs-audio = { path = "../wallrs-audio" }
 wallrs-content-image = { path = "../wallrs-content-image" }
 wallrs-content-shader = { path = "../wallrs-content-shader" }
+wallrs-content-video = { path = "../wallrs-content-video" }
 wallrs-proto = { path = "../wallrs-proto" }
 wallrs-render = { path = "../wallrs-render" }
 wayland-client = { workspace = true }

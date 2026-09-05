@@ -5,5 +5,10 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+libmpv2 = { workspace = true }
+libmpv2-sys = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+wallrs-proto = { path = "../wallrs-proto" }
 wallrs-render = { path = "../wallrs-render" }
 wgpu = { workspace = true }
