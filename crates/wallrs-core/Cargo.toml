@@ -24,4 +24,3 @@ image = { workspace = true }
 wayland-client = { workspace = true }
 wayland-protocols-wlr = { workspace = true }
 wgpu = { workspace = true }
-

@@ -356,6 +356,10 @@ impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for EngineState {
             _ => {}
         }
     }
+
+    wayland_client::event_created_child!(EngineState, ZwlrForeignToplevelManagerV1, [
+        0 => (ZwlrForeignToplevelHandleV1, ()),
+    ]);
 }
 
 impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for EngineState {
