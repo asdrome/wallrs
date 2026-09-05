@@ -62,12 +62,22 @@ pub trait WallpaperRenderer: Send {
     fn teardown(&mut self) {}
 }
 
+fn srgb_to_linear(c: f32) -> f64 {
+    let c = c.clamp(0.0, 1.0);
+    if c <= 0.04045 {
+        (c / 12.92) as f64
+    } else {
+        (((c + 0.055) / 1.055).powf(2.4)) as f64
+    }
+}
+
 /// A simple renderer that fills the surface with a solid RGBA color.
 #[derive(Debug, Clone)]
 pub struct SolidColorRenderer {
     pub color: [f32; 4],
     pub width: u32,
     pub height: u32,
+    pub target_format: Option<wgpu::TextureFormat>,
 }
 
 impl SolidColorRenderer {
@@ -76,6 +86,7 @@ impl SolidColorRenderer {
             color,
             width: 0,
             height: 0,
+            target_format: None,
         }
     }
 }
@@ -92,8 +103,9 @@ impl WallpaperRenderer for SolidColorRenderer {
         &mut self,
         _device: &wgpu::Device,
         _queue: &wgpu::Queue,
-        _target_format: wgpu::TextureFormat,
+        target_format: wgpu::TextureFormat,
     ) -> Result<(), RendererError> {
+        self.target_format = Some(target_format);
         Ok(())
     }
 
@@ -105,18 +117,30 @@ impl WallpaperRenderer for SolidColorRenderer {
     fn update(&mut self, _ctx: &FrameContext) {}
 
     fn render(&mut self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
+        let is_srgb = self.target_format.is_none_or(|f| f.is_srgb());
+        let clear_color = if is_srgb {
+            wgpu::Color {
+                r: srgb_to_linear(self.color[0]),
+                g: srgb_to_linear(self.color[1]),
+                b: srgb_to_linear(self.color[2]),
+                a: self.color[3] as f64,
+            }
+        } else {
+            wgpu::Color {
+                r: self.color[0] as f64,
+                g: self.color[1] as f64,
+                b: self.color[2] as f64,
+                a: self.color[3] as f64,
+            }
+        };
+
         let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("solid_color_render_pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: self.color[0] as f64,
-                        g: self.color[1] as f64,
-                        b: self.color[2] as f64,
-                        a: self.color[3] as f64,
-                    }),
+                    load: wgpu::LoadOp::Clear(clear_color),
                     store: wgpu::StoreOp::Store,
                 },
                 depth_slice: None,
@@ -163,5 +187,19 @@ mod tests {
 
         let err = renderer.set_property("unknown", PropertyValue::Bool(true));
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn test_srgb_to_linear() {
+        assert_eq!(srgb_to_linear(0.0), 0.0);
+        assert_eq!(srgb_to_linear(1.0), 1.0);
+
+        // #121212: 18 / 255 = 0.070588
+        let lin_12 = srgb_to_linear(18.0 / 255.0);
+        assert!((lin_12 - 0.006048).abs() < 0.001);
+
+        // #aaaaaa: 170 / 255 = 0.666667
+        let lin_aa = srgb_to_linear(170.0 / 255.0);
+        assert!((lin_aa - 0.401977).abs() < 0.001);
     }
 }

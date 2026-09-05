@@ -4,7 +4,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
-use wallrs_proto::{Command, OutputInfoProto, OutputSelector, Response};
+use wallrs_proto::{Command, OutputInfoProto, OutputSelector, PropertyValue, Response};
 
 use crate::engine::EngineState;
 
@@ -133,7 +133,24 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
 
                 if matches {
                     matched = true;
-                    if let Err(e) = out.set_property(&key, value.clone()) {
+                    if key == "color"
+                        && let PropertyValue::Color(c) = value
+                    {
+                        let gpu = crate::output::GpuContext {
+                            instance: &state.wgpu_instance,
+                            adapter: &state.wgpu_adapter,
+                            device: &state.wgpu_device,
+                            queue: &state.wgpu_queue,
+                        };
+                        let solid = Box::new(wallrs_render::SolidColorRenderer::new(c));
+                        if let Err(e) = out.set_renderer(solid, &gpu, &state.qh) {
+                            error = Some(e.to_string());
+                            break;
+                        }
+                        continue;
+                    }
+
+                    if let Err(e) = out.set_property(&key, value.clone(), &state.qh) {
                         error = Some(e.to_string());
                         break;
                     }
@@ -243,7 +260,7 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                                 }
                             };
 
-                            if let Err(e) = out.set_renderer(renderer, &gpu) {
+                            if let Err(e) = out.set_renderer(renderer, &gpu, &state.qh) {
                                 error = Some(e.to_string());
                                 break;
                             }
@@ -293,7 +310,7 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                                     }
                                 };
 
-                            if let Err(e) = out.set_renderer(renderer, &gpu) {
+                            if let Err(e) = out.set_renderer(renderer, &gpu, &state.qh) {
                                 error = Some(e.to_string());
                                 break;
                             }

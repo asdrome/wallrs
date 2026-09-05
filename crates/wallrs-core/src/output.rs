@@ -137,12 +137,8 @@ impl OutputSurface {
             self.height = height;
             self.configured = true;
 
-            // Trigger the first frame request to start the frame loop
-            self.layer_surface.wl_surface().frame(
-                qh,
-                FrameCallbackData(self.layer_surface.wl_surface().clone()),
-            );
-            self.layer_surface.commit();
+            // Immediately render the first frame to attach buffer, map surface in compositor, and kick off frame loop
+            self.render_frame(gpu.device, gpu.queue, qh);
         } else if self.width != width || self.height != height {
             tracing::info!(
                 output = ?self.name,
@@ -192,13 +188,19 @@ impl OutputSurface {
                 if let Some(config) = &self.surface_config {
                     surface.configure(device, config);
                 }
+                self.layer_surface.wl_surface().frame(
+                    qh,
+                    FrameCallbackData(self.layer_surface.wl_surface().clone()),
+                );
+                self.layer_surface.commit();
                 return;
             }
-            wgpu::CurrentSurfaceTexture::Timeout => {
-                tracing::warn!(output = ?self.name, "Surface acquisition timed out; dropping frame");
-                return;
-            }
-            wgpu::CurrentSurfaceTexture::Occluded => {
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                self.layer_surface.wl_surface().frame(
+                    qh,
+                    FrameCallbackData(self.layer_surface.wl_surface().clone()),
+                );
+                self.layer_surface.commit();
                 return;
             }
             wgpu::CurrentSurfaceTexture::Validation => {
@@ -263,6 +265,7 @@ impl OutputSurface {
         &mut self,
         mut renderer: Box<dyn WallpaperRenderer>,
         gpu: &GpuContext<'_>,
+        qh: &QueueHandle<EngineState>,
     ) -> Result<(), OutputError> {
         if let Some(config) = &self.surface_config {
             renderer
@@ -274,6 +277,9 @@ impl OutputSurface {
             old.teardown();
         }
         self.renderer = Some(renderer);
+        if self.configured && !self.paused {
+            self.render_frame(gpu.device, gpu.queue, qh);
+        }
         Ok(())
     }
 
@@ -282,11 +288,19 @@ impl OutputSurface {
         &mut self,
         key: &str,
         value: wallrs_proto::PropertyValue,
+        qh: &QueueHandle<EngineState>,
     ) -> Result<(), OutputError> {
         if let Some(renderer) = &mut self.renderer {
             renderer
                 .set_property(key, value)
                 .map_err(|e| OutputError::Renderer(e.to_string()))?;
+        }
+        if self.configured && !self.paused {
+            self.layer_surface.wl_surface().frame(
+                qh,
+                FrameCallbackData(self.layer_surface.wl_surface().clone()),
+            );
+            self.layer_surface.commit();
         }
         Ok(())
     }
