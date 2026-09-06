@@ -7,7 +7,7 @@ License:        MIT OR Apache-2.0
 URL:            https://github.com/asdromundo/wallrs
 Source0:        %{url}/archive/v%{version}/%{name}-%{version}.tar.gz
 
-# Dependencias estrictas de COMPILACIÓN (solo necesarias al construir el RPM)
+# Build dependencies (required only during RPM compilation)
 BuildRequires:  cargo
 BuildRequires:  rust >= 1.85.0
 BuildRequires:  pkgconf
@@ -17,7 +17,7 @@ BuildRequires:  wayland-devel
 BuildRequires:  vulkan-loader-devel
 BuildRequires:  systemd-rpm-macros
 
-# Dependencias estrictas de RUNTIME (lo único que se instala en la máquina del usuario)
+# Runtime dependencies (required for end-user execution)
 Requires:       vulkan-loader
 Requires:       pipewire-libs
 Requires:       mpv-libs
@@ -56,3 +56,4 @@ cargo test --workspace --locked
 %changelog
 * Sun Sep 06 2026 Antonio S. Dromundo <sebastiandromundo@outlook.com> - 0.1.0-1
 - Initial release of wallrs live wallpaper daemon
+

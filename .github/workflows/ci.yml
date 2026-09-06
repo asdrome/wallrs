@@ -17,9 +17,8 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # FAST CHECKS: PR Gatekeeper
-  # Obligatorio para PRs hacia main y post-merge. Salta si el PR es un Draft.
-  # Nombre determinista 'pr-gatekeeper' para usar en Branch Protection Rules.
+  # Fast checks (PR Gatekeeper)
+  # Runs on non-draft PRs targeting main and post-merge pushes to main.
   # ---------------------------------------------------------------------------
   pr-gatekeeper:
     name: pr-gatekeeper
@@ -59,9 +58,8 @@ jobs:
         run: cargo test --workspace --locked
 
   # ---------------------------------------------------------------------------
-  # HEAVY TASKS: Post-Merge Verification
-  # Se ejecuta únicamente en push a 'main' tras mergear el PR.
-  # Compila en release para asegurar que no existan regresiones de optimización.
+  # Heavy tasks (Post-Merge Release Build)
+  # Runs only on push to main branch to verify release compilation.
   # ---------------------------------------------------------------------------
   post-merge-build:
     name: post-merge-build
