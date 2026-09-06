@@ -23,7 +23,7 @@ impl Default for EngineConfig {
             socket_path: None,
             max_fps: None,
             fullscreen_pause: true,
-            pause_on_maximized: true,
+            pause_on_maximized: false,
         }
     }
 }
@@ -38,7 +38,7 @@ mod tests {
         assert!(config.socket_path.is_none());
         assert!(config.max_fps.is_none());
         assert!(config.fullscreen_pause);
-        assert!(config.pause_on_maximized);
+        assert!(!config.pause_on_maximized);
     }
 
     #[test]

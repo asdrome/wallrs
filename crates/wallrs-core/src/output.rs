@@ -187,7 +187,12 @@ impl OutputSurface {
         queue: &wgpu::Queue,
         qh: &QueueHandle<EngineState>,
     ) {
-        if self.is_paused() || !self.configured {
+        if !self.configured {
+            return;
+        }
+
+        let is_initial_frame = self.last_rendered_frame_time.is_none();
+        if self.is_paused() && !is_initial_frame {
             return;
         }
 
@@ -288,11 +293,13 @@ impl OutputSurface {
         queue.present(surface_texture);
         self.last_rendered_frame_time = Some(now);
 
-        // Request next frame callback to adhere to display refresh rate
-        self.layer_surface.wl_surface().frame(
-            qh,
-            FrameCallbackData(self.layer_surface.wl_surface().clone()),
-        );
+        // Only request next frame callback if not currently paused
+        if !self.is_paused() {
+            self.layer_surface.wl_surface().frame(
+                qh,
+                FrameCallbackData(self.layer_surface.wl_surface().clone()),
+            );
+        }
         self.layer_surface.commit();
     }
 
@@ -313,7 +320,7 @@ impl OutputSurface {
             old.teardown();
         }
         self.renderer = Some(renderer);
-        if self.configured && !self.is_paused() {
+        if self.configured {
             self.render_frame(gpu.device, gpu.queue, qh);
         }
         Ok(())

@@ -70,8 +70,10 @@ pub struct ToplevelData {
     pub title: Option<String>,
     pub is_fullscreen: bool,
     pub is_maximized: bool,
+    pub is_activated: bool,
     pub pending_fullscreen: Option<bool>,
     pub pending_maximized: Option<bool>,
+    pub pending_activated: Option<bool>,
 }
 
 /// Holds all state managed by the Wayland and render event loop.
@@ -354,8 +356,10 @@ impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for EngineState {
                         title: None,
                         is_fullscreen: false,
                         is_maximized: false,
+                        is_activated: false,
                         pending_fullscreen: None,
                         pending_maximized: None,
+                        pending_activated: None,
                     },
                 );
             }
@@ -408,8 +412,10 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for EngineState {
                     // 0 = maximized, 1 = minimized, 2 = activated, 3 = fullscreen
                     let chunks = state_bytes.as_chunks::<4>().0;
                     let is_maximized = chunks.iter().any(|chunk| u32::from_ne_bytes(*chunk) == 0);
+                    let is_activated = chunks.iter().any(|chunk| u32::from_ne_bytes(*chunk) == 2);
                     let is_fullscreen = chunks.iter().any(|chunk| u32::from_ne_bytes(*chunk) == 3);
                     data.pending_maximized = Some(is_maximized);
+                    data.pending_activated = Some(is_activated);
                     data.pending_fullscreen = Some(is_fullscreen);
                 }
             }
@@ -428,12 +434,19 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for EngineState {
                         data.is_maximized = max;
                         changed = true;
                     }
+                    if let Some(act) = data.pending_activated.take()
+                        && data.is_activated != act
+                    {
+                        data.is_activated = act;
+                        changed = true;
+                    }
                     if changed {
                         tracing::info!(
                             app_id = ?data.app_id,
                             title = ?data.title,
                             is_fullscreen = data.is_fullscreen,
                             is_maximized = data.is_maximized,
+                            is_activated = data.is_activated,
                             outputs = ?data.outputs,
                             "Toplevel window state changed"
                         );
@@ -446,8 +459,8 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for EngineState {
             zwlr_foreign_toplevel_handle_v1::Event::Closed => {
                 if let Some(data) = state.toplevels.remove(&id) {
                     data.handle.destroy();
-                    let was_blocking =
-                        data.is_fullscreen || (state.pause_on_maximized && data.is_maximized);
+                    let was_blocking = data.is_fullscreen
+                        || (state.pause_on_maximized && data.is_maximized && data.is_activated);
                     if was_blocking && state.fullscreen_pause {
                         state.update_fullscreen_pause();
                     }
@@ -463,17 +476,11 @@ impl EngineState {
     pub fn update_fullscreen_pause(&mut self) {
         let mut paused_outputs = HashSet::new();
         for toplevel in self.toplevels.values() {
-            let is_blocking =
-                toplevel.is_fullscreen || (self.pause_on_maximized && toplevel.is_maximized);
+            let is_blocking = toplevel.is_fullscreen
+                || (self.pause_on_maximized && toplevel.is_maximized && toplevel.is_activated);
             if is_blocking {
-                if toplevel.outputs.is_empty() {
-                    for out in self.outputs.values() {
-                        paused_outputs.insert(out.wl_output.id().protocol_id());
-                    }
-                } else {
-                    for &out_id in &toplevel.outputs {
-                        paused_outputs.insert(out_id);
-                    }
+                for &out_id in &toplevel.outputs {
+                    paused_outputs.insert(out_id);
                 }
             }
         }
