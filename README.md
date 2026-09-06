@@ -32,14 +32,14 @@ Designed from the ground up to replace bloated, legacy X11/GLX/PulseAudio tools 
 
 ## 🖥️ Compositor Compatibility Matrix
 
-| Compositor | Protocol (`wlr-layer-shell`) | Fullscreen / Maximize Pause | Status |
-| :--- | :---: | :---: | :--- |
-| **Hyprland** | ✅ Yes | ✅ Yes | **Fully Supported** (Primary target) |
-| **Sway** | ✅ Yes | ✅ Yes | **Fully Supported** |
-| **River** | ✅ Yes | ✅ Yes | **Fully Supported** |
-| **Labwc / Wayfire** | ✅ Yes | ✅ Yes | **Fully Supported** |
-| **KDE Plasma 6** | ✅ Yes | ⚠️ Partial | Supported (via kwin layer-shell integration) |
-| **GNOME Mutter** | ❌ No | ❌ No | **Unsupported** (GNOME does not implement `wlr-layer-shell`) |
+| Compositor          | Protocol (`wlr-layer-shell`) | Fullscreen / Maximize Pause | Status                                                       |
+| :------------------ | :--------------------------: | :-------------------------: | :----------------------------------------------------------- |
+| **Hyprland**        |            ✅ Yes             |            ✅ Yes            | **Fully Supported** (Primary target)                         |
+| **Sway**            |            ✅ Yes             |            ✅ Yes            | **Fully Supported**                                          |
+| **River**           |            ✅ Yes             |            ✅ Yes            | **Fully Supported**                                          |
+| **Labwc / Wayfire** |            ✅ Yes             |            ✅ Yes            | **Fully Supported**                                          |
+| **KDE Plasma 6**    |            ✅ Yes             |          ⚠️ Partial          | Supported (via kwin layer-shell integration)                 |
+| **GNOME Mutter**    |             ❌ No             |            ❌ No             | **Unsupported** (GNOME does not implement `wlr-layer-shell`) |
 
 ---
 
@@ -290,3 +290,4 @@ Dual-licensed under either of:
 - **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE-APACHE))
 
 at your option.
+

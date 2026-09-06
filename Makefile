@@ -38,3 +38,4 @@ uninstall:
 	rm -f $(DESTDIR)$(SYSTEMD_USER_DIR)/wallrsd.service
 	rm -rf $(DESTDIR)$(DOCDIR)
 	rm -rf $(DESTDIR)$(LICDIR)
+

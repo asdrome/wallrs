@@ -12,3 +12,4 @@ RestartSec=1s
 
 [Install]
 WantedBy=graphical-session.target
+
