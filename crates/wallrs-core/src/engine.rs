@@ -74,6 +74,7 @@ pub struct ToplevelData {
     pub pending_fullscreen: Option<bool>,
     pub pending_maximized: Option<bool>,
     pub pending_activated: Option<bool>,
+    pub outputs_changed: bool,
 }
 
 /// Holds all state managed by the Wayland and render event loop.
@@ -183,6 +184,9 @@ impl OutputHandler for EngineState {
         let mut output_surface = OutputSurface::new(name, output, layer_surface, self.max_fps);
         output_surface.audio_handle = self.audio_handle.clone();
         self.outputs.insert(surface_id, output_surface);
+        if self.fullscreen_pause {
+            self.update_fullscreen_pause();
+        }
     }
 
     fn update_output(
@@ -360,6 +364,7 @@ impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for EngineState {
                         pending_fullscreen: None,
                         pending_maximized: None,
                         pending_activated: None,
+                        outputs_changed: false,
                     },
                 );
             }
@@ -397,13 +402,17 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for EngineState {
                 }
             }
             zwlr_foreign_toplevel_handle_v1::Event::OutputEnter { output } => {
-                if let Some(data) = state.toplevels.get_mut(&id) {
-                    data.outputs.insert(output.id().protocol_id());
+                if let Some(data) = state.toplevels.get_mut(&id)
+                    && data.outputs.insert(output.id().protocol_id())
+                {
+                    data.outputs_changed = true;
                 }
             }
             zwlr_foreign_toplevel_handle_v1::Event::OutputLeave { output } => {
-                if let Some(data) = state.toplevels.get_mut(&id) {
-                    data.outputs.remove(&output.id().protocol_id());
+                if let Some(data) = state.toplevels.get_mut(&id)
+                    && data.outputs.remove(&output.id().protocol_id())
+                {
+                    data.outputs_changed = true;
                 }
             }
             zwlr_foreign_toplevel_handle_v1::Event::State { state: state_bytes } => {
@@ -422,6 +431,10 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for EngineState {
             zwlr_foreign_toplevel_handle_v1::Event::Done => {
                 let mut changed = false;
                 if let Some(data) = state.toplevels.get_mut(&id) {
+                    if data.outputs_changed {
+                        data.outputs_changed = false;
+                        changed = true;
+                    }
                     if let Some(fs) = data.pending_fullscreen.take()
                         && data.is_fullscreen != fs
                     {
@@ -459,8 +472,8 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for EngineState {
             zwlr_foreign_toplevel_handle_v1::Event::Closed => {
                 if let Some(data) = state.toplevels.remove(&id) {
                     data.handle.destroy();
-                    let was_blocking = data.is_fullscreen
-                        || (state.pause_on_maximized && data.is_maximized && data.is_activated);
+                    let was_blocking =
+                        data.is_fullscreen || (state.pause_on_maximized && data.is_maximized);
                     if was_blocking && state.fullscreen_pause {
                         state.update_fullscreen_pause();
                     }
@@ -476,11 +489,17 @@ impl EngineState {
     pub fn update_fullscreen_pause(&mut self) {
         let mut paused_outputs = HashSet::new();
         for toplevel in self.toplevels.values() {
-            let is_blocking = toplevel.is_fullscreen
-                || (self.pause_on_maximized && toplevel.is_maximized && toplevel.is_activated);
+            let is_blocking =
+                toplevel.is_fullscreen || (self.pause_on_maximized && toplevel.is_maximized);
             if is_blocking {
-                for &out_id in &toplevel.outputs {
-                    paused_outputs.insert(out_id);
+                if toplevel.outputs.is_empty() {
+                    for out in self.outputs.values() {
+                        paused_outputs.insert(out.wl_output.id().protocol_id());
+                    }
+                } else {
+                    for &out_id in &toplevel.outputs {
+                        paused_outputs.insert(out_id);
+                    }
                 }
             }
         }

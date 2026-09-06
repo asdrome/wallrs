@@ -22,8 +22,12 @@ struct Args {
     #[arg(long)]
     no_fullscreen_pause: bool,
 
-    /// Also pause wallpaper rendering on an output if an active window on that output is maximized
+    /// Disable automatic pausing of wallpaper rendering when a window is maximized
     #[arg(long)]
+    no_pause_on_maximized: bool,
+
+    /// Legacy flag retained for backward compatibility (pause on maximized is now default)
+    #[arg(long, hide = true)]
     pause_on_maximized: bool,
 }
 
@@ -88,7 +92,7 @@ fn main() {
         }
     };
 
-    let pause_on_maximized = args.pause_on_maximized;
+    let pause_on_maximized = !args.no_pause_on_maximized;
 
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
@@ -164,13 +168,13 @@ mod tests {
             "--fps",
             "60",
             "--no-fullscreen-pause",
-            "--pause-on-maximized",
+            "--no-pause-on-maximized",
         ])
         .unwrap();
 
         assert_eq!(args.color, "#123456");
         assert_eq!(args.fps, Some(60));
         assert!(args.no_fullscreen_pause);
-        assert!(args.pause_on_maximized);
+        assert!(args.no_pause_on_maximized);
     }
 }
