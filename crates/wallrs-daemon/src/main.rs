@@ -168,6 +168,7 @@ mod tests {
             "--fps",
             "60",
             "--no-fullscreen-pause",
+            "--pause-on-maximized",
             "--no-pause-on-maximized",
         ])
         .unwrap();
@@ -175,6 +176,7 @@ mod tests {
         assert_eq!(args.color, "#123456");
         assert_eq!(args.fps, Some(60));
         assert!(args.no_fullscreen_pause);
+        assert!(args.pause_on_maximized);
         assert!(args.no_pause_on_maximized);
     }
 }
