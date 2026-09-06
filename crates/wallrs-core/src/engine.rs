@@ -66,6 +66,8 @@ pub enum EngineError {
 pub struct ToplevelData {
     pub handle: ZwlrForeignToplevelHandleV1,
     pub outputs: HashSet<u32>,
+    pub app_id: Option<String>,
+    pub title: Option<String>,
     pub is_fullscreen: bool,
     pub is_maximized: bool,
     pub pending_fullscreen: Option<bool>,
@@ -348,6 +350,8 @@ impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for EngineState {
                     ToplevelData {
                         handle: toplevel,
                         outputs: HashSet::new(),
+                        app_id: None,
+                        title: None,
                         is_fullscreen: false,
                         is_maximized: false,
                         pending_fullscreen: None,
@@ -378,6 +382,16 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for EngineState {
     ) {
         let id = proxy.id();
         match event {
+            zwlr_foreign_toplevel_handle_v1::Event::Title { title } => {
+                if let Some(data) = state.toplevels.get_mut(&id) {
+                    data.title = Some(title);
+                }
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::AppId { app_id } => {
+                if let Some(data) = state.toplevels.get_mut(&id) {
+                    data.app_id = Some(app_id);
+                }
+            }
             zwlr_foreign_toplevel_handle_v1::Event::OutputEnter { output } => {
                 if let Some(data) = state.toplevels.get_mut(&id) {
                     data.outputs.insert(output.id().protocol_id());
@@ -414,6 +428,16 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for EngineState {
                         data.is_maximized = max;
                         changed = true;
                     }
+                    if changed {
+                        tracing::info!(
+                            app_id = ?data.app_id,
+                            title = ?data.title,
+                            is_fullscreen = data.is_fullscreen,
+                            is_maximized = data.is_maximized,
+                            outputs = ?data.outputs,
+                            "Toplevel window state changed"
+                        );
+                    }
                 }
                 if changed && state.fullscreen_pause {
                     state.update_fullscreen_pause();
@@ -442,11 +466,23 @@ impl EngineState {
             let is_blocking =
                 toplevel.is_fullscreen || (self.pause_on_maximized && toplevel.is_maximized);
             if is_blocking {
-                for &out_id in &toplevel.outputs {
-                    paused_outputs.insert(out_id);
+                if toplevel.outputs.is_empty() {
+                    for out in self.outputs.values() {
+                        paused_outputs.insert(out.wl_output.id().protocol_id());
+                    }
+                } else {
+                    for &out_id in &toplevel.outputs {
+                        paused_outputs.insert(out_id);
+                    }
                 }
             }
         }
+
+        tracing::info!(
+            pause_on_maximized = self.pause_on_maximized,
+            paused_output_count = paused_outputs.len(),
+            "Evaluated fullscreen/maximized pause state across outputs"
+        );
 
         for out in self.outputs.values_mut() {
             let should_pause = paused_outputs.contains(&out.wl_output.id().protocol_id());
