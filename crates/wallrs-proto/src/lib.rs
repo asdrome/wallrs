@@ -84,6 +84,8 @@ pub struct WallpaperManifest {
     pub shader: Option<ShaderConfig>,
     #[serde(default)]
     pub video: Option<VideoConfig>,
+    #[serde(default)]
+    pub audio: Option<AudioTrackConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,6 +129,15 @@ pub struct ShaderConfig {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VideoConfig {
+    pub path: PathBuf,
+    #[serde(default)]
+    pub volume: Option<f32>,
+    #[serde(default)]
+    pub r#loop: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioTrackConfig {
     pub path: PathBuf,
     #[serde(default)]
     pub volume: Option<f32>,
@@ -260,5 +271,30 @@ pan = { speed = 0.02, axis = "x" }
         let pan = image.layers[1].pan.as_ref().unwrap();
         assert_eq!(pan.speed, 0.02);
         assert_eq!(pan.axis, "x");
+        assert!(manifest.audio.is_none());
+    }
+
+    #[test]
+    fn test_wallpaper_manifest_with_audio() {
+        let toml_data = r#"
+[wallpaper]
+type = "image"
+name = "cyber-cafe"
+
+[[image.layers]]
+path = "cafe.png"
+
+[audio]
+path = "ambient.ogg"
+volume = 35.5
+loop = true
+"#;
+
+        let manifest = WallpaperManifest::from_toml_str(toml_data).expect("failed to parse TOML");
+        assert_eq!(manifest.wallpaper.name, "cyber-cafe");
+        let audio = manifest.audio.expect("audio config missing");
+        assert_eq!(audio.path, PathBuf::from("ambient.ogg"));
+        assert_eq!(audio.volume, Some(35.5));
+        assert_eq!(audio.r#loop, Some(true));
     }
 }

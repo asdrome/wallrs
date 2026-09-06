@@ -13,6 +13,9 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 use thiserror::Error;
 
+pub mod player;
+pub use player::{AudioPlayerError, BackgroundAudioPlayer};
+
 /// Error returned by audio capture and analysis operations.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum AudioError {

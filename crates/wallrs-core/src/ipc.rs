@@ -295,6 +295,27 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                                 error = Some(e.to_string());
                                 break;
                             }
+
+                            if let Some(audio_cfg) = &manifest.audio {
+                                match wallrs_audio::BackgroundAudioPlayer::from_config(
+                                    audio_cfg, base_dir,
+                                ) {
+                                    Ok(mut player) => {
+                                        if out.is_paused() {
+                                            player.set_paused(true);
+                                        }
+                                        out.audio_track = Some(player);
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            error = ?e,
+                                            "Failed to load background audio track for image wallpaper"
+                                        );
+                                    }
+                                }
+                            } else {
+                                out.audio_track = None;
+                            }
                         }
                     }
 
@@ -345,6 +366,27 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                                 error = Some(e.to_string());
                                 break;
                             }
+
+                            if let Some(audio_cfg) = &manifest.audio {
+                                match wallrs_audio::BackgroundAudioPlayer::from_config(
+                                    audio_cfg, base_dir,
+                                ) {
+                                    Ok(mut player) => {
+                                        if out.is_paused() {
+                                            player.set_paused(true);
+                                        }
+                                        out.audio_track = Some(player);
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            error = ?e,
+                                            "Failed to load background audio track for shader wallpaper"
+                                        );
+                                    }
+                                }
+                            } else {
+                                out.audio_track = None;
+                            }
                         }
                     }
 
@@ -394,6 +436,7 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                                 error = Some(e.to_string());
                                 break;
                             }
+                            out.audio_track = None;
                         }
                     }
 

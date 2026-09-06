@@ -1812,10 +1812,12 @@ name = "wallrs-audio"
 version = "0.1.0"
 dependencies = [
  "arc-swap",
+ "libmpv2",
  "pipewire",
  "rustfft",
  "thiserror",
  "tracing",
+ "wallrs-proto",
 ]
 
 [[package]]
@@ -1823,8 +1825,11 @@ name = "wallrs-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "image",
+ "naga",
  "serde",
  "serde_json",
+ "wallrs-content-shader",
  "wallrs-proto",
 ]
 

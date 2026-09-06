@@ -154,6 +154,9 @@ wallctl set-property color "#00ffcc"
 # Capture a screenshot from GPU memory
 wallctl screenshot eDP-1 ~/Pictures/wallpaper_snap.png
 
+# Validate and lint a wallpaper directory or manifest before loading
+wallctl validate examples/audio-visualizer
+
 # Gracefully stop the daemon
 wallctl kill
 ```
@@ -162,7 +165,7 @@ wallctl kill
 
 ## 🎨 Wallpaper Manifest Guide (`wallpaper.toml`)
 
-Wallpapers in `wallrs` are organized as directories containing a `wallpaper.toml` manifest and accompanying assets.
+Wallpapers in `wallrs` are organized as directories containing a `wallpaper.toml` manifest and accompanying assets. For a full tutorial, best practices, and WGSL/Shadertoy templates, read the **[Comprehensive Authoring Guide](docs/authoring-guide.md)**.
 
 ### 1. Parallax Image Wallpaper
 Multi-layer image with pointer-driven parallax and continuous linear pan.
@@ -239,6 +242,23 @@ loop = true
 volume = 40.0
 mute = false
 speed = 1.0
+```
+
+### 4. Standalone Background Audio (`[audio]`)
+Attach an independent ambient audio or music track to any image or shader wallpaper:
+
+```toml
+[wallpaper]
+type = "image"
+name = "cyber-cafe"
+
+[[image.layers]]
+path = "cafe.png"
+
+[audio]
+path = "ambient.ogg"
+volume = 35.0
+loop = true
 ```
 
 ---

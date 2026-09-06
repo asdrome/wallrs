@@ -44,6 +44,7 @@ pub struct OutputSurface {
     pub last_rendered_frame_time: Option<Instant>,
     pub cursor_position: Option<(f32, f32)>,
     pub audio_handle: Option<wallrs_audio::SpectrumHandle>,
+    pub audio_track: Option<wallrs_audio::BackgroundAudioPlayer>,
 }
 
 /// Bundles WGPU rendering context references passed to output configuration.
@@ -79,6 +80,7 @@ impl OutputSurface {
             last_rendered_frame_time: None,
             cursor_position: None,
             audio_handle: None,
+            audio_track: None,
         }
     }
 
@@ -335,8 +337,11 @@ impl OutputSurface {
     ) -> Result<(), OutputError> {
         if let Some(renderer) = &mut self.renderer {
             renderer
-                .set_property(key, value)
+                .set_property(key, value.clone())
                 .map_err(|e| OutputError::Renderer(e.to_string()))?;
+        }
+        if let Some(player) = &mut self.audio_track {
+            let _ = player.set_property(key, value);
         }
         if self.configured && !self.is_paused() {
             self.layer_surface.wl_surface().frame(
@@ -354,10 +359,14 @@ impl OutputSurface {
         let was_paused = self.is_paused();
         self.manual_paused = paused;
         let is_paused = self.is_paused();
-        if was_paused != is_paused
-            && let Some(renderer) = &mut self.renderer
-        {
-            let _ = renderer.set_property("pause", wallrs_proto::PropertyValue::Bool(is_paused));
+        if was_paused != is_paused {
+            if let Some(renderer) = &mut self.renderer {
+                let _ =
+                    renderer.set_property("pause", wallrs_proto::PropertyValue::Bool(is_paused));
+            }
+            if let Some(player) = &mut self.audio_track {
+                player.set_paused(is_paused);
+            }
         }
         if was_paused && !is_paused && self.configured {
             self.layer_surface.wl_surface().frame(
@@ -373,10 +382,14 @@ impl OutputSurface {
         let was_paused = self.is_paused();
         self.fullscreen_paused = paused;
         let is_paused = self.is_paused();
-        if was_paused != is_paused
-            && let Some(renderer) = &mut self.renderer
-        {
-            let _ = renderer.set_property("pause", wallrs_proto::PropertyValue::Bool(is_paused));
+        if was_paused != is_paused {
+            if let Some(renderer) = &mut self.renderer {
+                let _ =
+                    renderer.set_property("pause", wallrs_proto::PropertyValue::Bool(is_paused));
+            }
+            if let Some(player) = &mut self.audio_track {
+                player.set_paused(is_paused);
+            }
         }
         if was_paused && !is_paused && self.configured {
             self.layer_surface.wl_surface().frame(
@@ -397,6 +410,7 @@ impl OutputSurface {
         if let Some(mut renderer) = self.renderer.take() {
             renderer.teardown();
         }
+        self.audio_track = None;
         self.wgpu_surface = None;
         self.surface_config = None;
     }
