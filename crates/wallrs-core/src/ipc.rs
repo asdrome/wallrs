@@ -204,6 +204,37 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
             }
         }
 
+        Command::TogglePause { output } => match output {
+            Some(name) => {
+                let mut matched = false;
+                for out in state.outputs.values_mut() {
+                    if out.name.as_deref() == Some(name.as_str()) {
+                        matched = true;
+                        let new_paused = !out.manual_paused;
+                        out.set_paused(new_paused, &state.qh);
+                        break;
+                    }
+                }
+                if !matched {
+                    Response::Error(format!("No matching output found for '{name}'"))
+                } else {
+                    Response::Ok
+                }
+            }
+            None => {
+                if state.outputs.is_empty() {
+                    Response::Ok
+                } else {
+                    let any_paused = state.outputs.values().any(|o| o.manual_paused);
+                    let target_paused = !any_paused;
+                    for out in state.outputs.values_mut() {
+                        out.set_paused(target_paused, &state.qh);
+                    }
+                    Response::Ok
+                }
+            }
+        },
+
         Command::Kill => {
             tracing::info!("Received Kill command via IPC socket. Shutting down daemon.");
             state.exit = true;

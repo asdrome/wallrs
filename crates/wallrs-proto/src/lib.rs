@@ -36,6 +36,9 @@ pub enum Command {
     Resume {
         output: Option<String>,
     },
+    TogglePause {
+        output: Option<String>,
+    },
     Screenshot {
         output: String,
         path: PathBuf,
@@ -189,6 +192,13 @@ mod tests {
         let json = serde_json::to_string(&cmd).unwrap();
         let parsed: Command = serde_json::from_str(&json).unwrap();
         assert_eq!(cmd, parsed);
+
+        let cmd_toggle = Command::TogglePause {
+            output: Some("HDMI-A-1".into()),
+        };
+        let json_toggle = serde_json::to_string(&cmd_toggle).unwrap();
+        let parsed_toggle: Command = serde_json::from_str(&json_toggle).unwrap();
+        assert_eq!(cmd_toggle, parsed_toggle);
 
         let cmd_list = Command::ListOutputs;
         let json_list = serde_json::to_string(&cmd_list).unwrap();

@@ -341,8 +341,8 @@ Deliberadamente plano: no hay tipos de propiedad genéricos (`slider`, `combolis
 
 
 ### Fase 8 — Empaquetado y documentación
-- [ ] Paquete AUR (o Nix flake), README con matriz de compositores probados, ejemplos de manifiestos.
-- [ ] Unit de `systemd --user` para `wallrsd` (o instrucciones equivalentes para autostart en el compositor, ej. `exec` en la config de Sway).
+- [x] Paquete AUR (PKGBUILD), Makefile, README con matriz de compositores probados, ejemplos de manifiestos y wallctl toggle-pause.
+- [x] Unit de `systemd --user` para `wallrsd` (y configuración documentada para Hyprland y Sway).
 - **Criterio de aceptación:** instalación limpia desde el paquete en una VM nueva, sin pasos manuales no documentados.
 
 ---

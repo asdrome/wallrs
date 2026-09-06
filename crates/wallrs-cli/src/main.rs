@@ -42,6 +42,10 @@ enum Subcommands {
     /// Resume wallpaper rendering
     Resume(TargetOutputArgs),
 
+    /// Toggle wallpaper rendering pause/resume state
+    #[command(alias = "toggle")]
+    TogglePause(TargetOutputArgs),
+
     /// Load and display a wallpaper from a manifest folder or wallpaper.toml
     SetWallpaper(SetWallpaperArgs),
 
@@ -272,6 +276,12 @@ fn run() -> Result<(), String> {
             },
             false,
         ),
+        Subcommands::TogglePause(args) => (
+            Command::TogglePause {
+                output: args.output,
+            },
+            false,
+        ),
         Subcommands::SetWallpaper(args) => {
             let manifest_path = if args.path.is_dir() {
                 args.path.join("wallpaper.toml")
@@ -398,6 +408,25 @@ mod tests {
                 assert_eq!(args.path, PathBuf::from("test.png"));
             }
             _ => panic!("Expected Subcommands::Screenshot"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_toggle_pause() {
+        let cli = Cli::try_parse_from(["wallctl", "toggle-pause", "--output", "eDP-1"]).unwrap();
+        match cli.command {
+            Subcommands::TogglePause(args) => {
+                assert_eq!(args.output, Some("eDP-1".into()));
+            }
+            _ => panic!("Expected Subcommands::TogglePause"),
+        }
+
+        let cli_alias = Cli::try_parse_from(["wallctl", "toggle"]).unwrap();
+        match cli_alias.command {
+            Subcommands::TogglePause(args) => {
+                assert_eq!(args.output, None);
+            }
+            _ => panic!("Expected Subcommands::TogglePause"),
         }
     }
 }
