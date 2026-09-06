@@ -1,13 +1,14 @@
 name: CI
 
 on:
-  push:
-    branches: [ "main", "dev" ]
   pull_request:
-    branches: [ "main", "dev" ]
+    branches: [ "main" ]
+    types: [ opened, synchronize, reopened, ready_for_review ]
+  push:
+    branches: [ "main" ]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -15,9 +16,15 @@ env:
   RUSTFLAGS: "-D warnings"
 
 jobs:
-  check-and-test:
-    name: Check, Lint & Test
+  # ---------------------------------------------------------------------------
+  # FAST CHECKS: PR Gatekeeper
+  # Obligatorio para PRs hacia main y post-merge. Salta si el PR es un Draft.
+  # Nombre determinista 'pr-gatekeeper' para usar en Branch Protection Rules.
+  # ---------------------------------------------------------------------------
+  pr-gatekeeper:
+    name: pr-gatekeeper
     runs-on: ubuntu-24.04
+    if: github.event_name == 'push' || !github.event.pull_request.draft
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -27,8 +34,10 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Rust Cache
+      - name: Cache Rust dependencies and build artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "wallrs-ci"
 
       - name: Install system dependencies
         run: |
@@ -43,8 +52,43 @@ jobs:
       - name: Check code formatting
         run: cargo fmt --all -- --check
 
-      - name: Lint with Clippy
+      - name: Lint workspace with Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Run workspace tests
         run: cargo test --workspace --locked
+
+  # ---------------------------------------------------------------------------
+  # HEAVY TASKS: Post-Merge Verification
+  # Se ejecuta únicamente en push a 'main' tras mergear el PR.
+  # Compila en release para asegurar que no existan regresiones de optimización.
+  # ---------------------------------------------------------------------------
+  post-merge-build:
+    name: post-merge-build
+    needs: pr-gatekeeper
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "wallrs-ci"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libvulkan-dev \
+            libpipewire-0.3-dev \
+            libmpv-dev \
+            libwayland-dev
+
+      - name: Verify release build
+        run: cargo build --release --locked
