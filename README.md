@@ -64,7 +64,21 @@ sudo apt install cargo rustc libvulkan-dev libpipewire-0.3-dev libmpv-dev libway
 
 ## 🚀 Installation
 
-### 1. Build and Install via Makefile (Recommended)
+### 1. Prebuilt Packages (GitHub Releases)
+
+Download prebuilt `.deb`, `.rpm`, or generic `.tar.gz` binaries from [Releases](https://github.com/asdromundo/wallrs/releases):
+
+#### Ubuntu / Kubuntu / Debian (`.deb`)
+```bash
+sudo apt install ./wallrs_*.deb
+```
+
+#### Fedora / RHEL (`.rpm`)
+```bash
+sudo dnf install ./wallrs-*.rpm
+```
+
+### 2. Build and Install via Makefile
 ```bash
 git clone https://github.com/asdromundo/wallrs.git
 cd wallrs
@@ -73,13 +87,31 @@ sudo make install
 ```
 *Installs `wallrsd` and `wallctl` to `/usr/local/bin`, and the systemd unit to `/usr/local/lib/systemd/user/`.*
 
-### 2. Arch Linux (PKGBUILD)
+### 3. Build Packages from Source Locally
+
+#### Debian / Ubuntu package (`.deb` via `cargo-deb`)
+```bash
+cargo install cargo-deb --locked
+cargo deb -p wallrs-daemon
+sudo apt install ./target/debian/wallrs_*.deb
+```
+
+#### Fedora / RPM package (`.rpm` via `rpmbuild`)
+```bash
+mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+git archive --format=tar.gz --prefix="wallrs-0.1.0/" -o ~/rpmbuild/SOURCES/wallrs-0.1.0.tar.gz HEAD
+cp extra/rpm/wallrs.spec ~/rpmbuild/SPECS/
+rpmbuild -ba ~/rpmbuild/SPECS/wallrs.spec
+sudo dnf install ~/rpmbuild/RPMS/x86_64/wallrs-*.rpm
+```
+
+### 4. Arch Linux (PKGBUILD)
 ```bash
 cd extra/arch
 makepkg -si
 ```
 
-### 3. Cargo Install (From source)
+### 5. Cargo Install (From source)
 ```bash
 cargo install --path crates/wallrs-daemon
 cargo install --path crates/wallrs-cli
