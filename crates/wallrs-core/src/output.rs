@@ -347,6 +347,11 @@ impl OutputSurface {
         let was_paused = self.is_paused();
         self.manual_paused = paused;
         let is_paused = self.is_paused();
+        if was_paused != is_paused
+            && let Some(renderer) = &mut self.renderer
+        {
+            let _ = renderer.set_property("pause", wallrs_proto::PropertyValue::Bool(is_paused));
+        }
         if was_paused && !is_paused && self.configured {
             self.layer_surface.wl_surface().frame(
                 qh,
@@ -361,6 +366,11 @@ impl OutputSurface {
         let was_paused = self.is_paused();
         self.fullscreen_paused = paused;
         let is_paused = self.is_paused();
+        if was_paused != is_paused
+            && let Some(renderer) = &mut self.renderer
+        {
+            let _ = renderer.set_property("pause", wallrs_proto::PropertyValue::Bool(is_paused));
+        }
         if was_paused && !is_paused && self.configured {
             self.layer_surface.wl_surface().frame(
                 qh,

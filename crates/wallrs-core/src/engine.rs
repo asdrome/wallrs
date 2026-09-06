@@ -67,7 +67,9 @@ pub struct ToplevelData {
     pub handle: ZwlrForeignToplevelHandleV1,
     pub outputs: HashSet<u32>,
     pub is_fullscreen: bool,
+    pub is_maximized: bool,
     pub pending_fullscreen: Option<bool>,
+    pub pending_maximized: Option<bool>,
 }
 
 /// Holds all state managed by the Wayland and render event loop.
@@ -88,6 +90,7 @@ pub struct EngineState {
     pub audio_handle: Option<wallrs_audio::SpectrumHandle>,
     pub max_fps: Option<u32>,
     pub fullscreen_pause: bool,
+    pub pause_on_maximized: bool,
     pub toplevel_manager: Option<ZwlrForeignToplevelManagerV1>,
     pub toplevels: HashMap<ObjectId, ToplevelData>,
     pub exit: bool,
@@ -346,7 +349,9 @@ impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for EngineState {
                         handle: toplevel,
                         outputs: HashSet::new(),
                         is_fullscreen: false,
+                        is_maximized: false,
                         pending_fullscreen: None,
+                        pending_maximized: None,
                     },
                 );
             }
@@ -385,23 +390,30 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for EngineState {
             }
             zwlr_foreign_toplevel_handle_v1::Event::State { state: state_bytes } => {
                 if let Some(data) = state.toplevels.get_mut(&id) {
-                    // Enum entry 3 corresponds to Fullscreen
-                    let is_fullscreen = state_bytes
-                        .as_chunks::<4>()
-                        .0
-                        .iter()
-                        .any(|chunk| u32::from_ne_bytes(*chunk) == 3);
+                    // Enum entries in zwlr_foreign_toplevel_handle_v1::state:
+                    // 0 = maximized, 1 = minimized, 2 = activated, 3 = fullscreen
+                    let chunks = state_bytes.as_chunks::<4>().0;
+                    let is_maximized = chunks.iter().any(|chunk| u32::from_ne_bytes(*chunk) == 0);
+                    let is_fullscreen = chunks.iter().any(|chunk| u32::from_ne_bytes(*chunk) == 3);
+                    data.pending_maximized = Some(is_maximized);
                     data.pending_fullscreen = Some(is_fullscreen);
                 }
             }
             zwlr_foreign_toplevel_handle_v1::Event::Done => {
                 let mut changed = false;
-                if let Some(data) = state.toplevels.get_mut(&id)
-                    && let Some(fs) = data.pending_fullscreen.take()
-                    && data.is_fullscreen != fs
-                {
-                    data.is_fullscreen = fs;
-                    changed = true;
+                if let Some(data) = state.toplevels.get_mut(&id) {
+                    if let Some(fs) = data.pending_fullscreen.take()
+                        && data.is_fullscreen != fs
+                    {
+                        data.is_fullscreen = fs;
+                        changed = true;
+                    }
+                    if let Some(max) = data.pending_maximized.take()
+                        && data.is_maximized != max
+                    {
+                        data.is_maximized = max;
+                        changed = true;
+                    }
                 }
                 if changed && state.fullscreen_pause {
                     state.update_fullscreen_pause();
@@ -410,7 +422,9 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for EngineState {
             zwlr_foreign_toplevel_handle_v1::Event::Closed => {
                 if let Some(data) = state.toplevels.remove(&id) {
                     data.handle.destroy();
-                    if data.is_fullscreen && state.fullscreen_pause {
+                    let was_blocking =
+                        data.is_fullscreen || (state.pause_on_maximized && data.is_maximized);
+                    if was_blocking && state.fullscreen_pause {
                         state.update_fullscreen_pause();
                     }
                 }
@@ -421,19 +435,21 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for EngineState {
 }
 
 impl EngineState {
-    /// Recalculates fullscreen pause status for all active outputs.
+    /// Recalculates fullscreen/maximized pause status for all active outputs.
     pub fn update_fullscreen_pause(&mut self) {
-        let mut fullscreen_outputs = HashSet::new();
+        let mut paused_outputs = HashSet::new();
         for toplevel in self.toplevels.values() {
-            if toplevel.is_fullscreen {
+            let is_blocking =
+                toplevel.is_fullscreen || (self.pause_on_maximized && toplevel.is_maximized);
+            if is_blocking {
                 for &out_id in &toplevel.outputs {
-                    fullscreen_outputs.insert(out_id);
+                    paused_outputs.insert(out_id);
                 }
             }
         }
 
         for out in self.outputs.values_mut() {
-            let should_pause = fullscreen_outputs.contains(&out.wl_output.id().protocol_id());
+            let should_pause = paused_outputs.contains(&out.wl_output.id().protocol_id());
             out.set_fullscreen_paused(should_pause, &self.qh);
         }
     }
@@ -483,6 +499,7 @@ impl Engine {
             .unwrap_or_else(wallrs_proto::default_socket_path);
         let max_fps = config.max_fps;
         let fullscreen_pause = config.fullscreen_pause;
+        let pause_on_maximized = config.pause_on_maximized;
 
         tracing::info!("Connecting to Wayland display");
         let conn = Connection::connect_to_env()
@@ -611,6 +628,7 @@ impl Engine {
             audio_handle,
             max_fps,
             fullscreen_pause,
+            pause_on_maximized,
             toplevel_manager,
             toplevels: HashMap::new(),
             exit: false,

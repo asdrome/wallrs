@@ -14,6 +14,7 @@ pub struct EngineConfig {
     pub socket_path: Option<std::path::PathBuf>,
     pub max_fps: Option<u32>,
     pub fullscreen_pause: bool,
+    pub pause_on_maximized: bool,
 }
 
 impl Default for EngineConfig {
@@ -22,6 +23,7 @@ impl Default for EngineConfig {
             socket_path: None,
             max_fps: None,
             fullscreen_pause: true,
+            pause_on_maximized: false,
         }
     }
 }
@@ -36,6 +38,7 @@ mod tests {
         assert!(config.socket_path.is_none());
         assert!(config.max_fps.is_none());
         assert!(config.fullscreen_pause);
+        assert!(!config.pause_on_maximized);
     }
 
     #[test]

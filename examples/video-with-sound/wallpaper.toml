@@ -1,0 +1,8 @@
+[wallpaper]
+type = "video"
+name = "video-with-sound"
+
+[video]
+path = "sample-sound.mp4"
+volume = 50.0
+loop = true
