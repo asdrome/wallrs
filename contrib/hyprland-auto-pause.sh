@@ -30,6 +30,10 @@ WALLCTL_BIN="${WALLCTL_BIN:-}"
 if [ -z "${WALLCTL_BIN}" ]; then
     if command -v wallctl >/dev/null 2>&1; then
         WALLCTL_BIN="wallctl"
+    elif [ -x "/usr/local/bin/wallctl" ]; then
+        WALLCTL_BIN="/usr/local/bin/wallctl"
+    elif [ -x "/usr/bin/wallctl" ]; then
+        WALLCTL_BIN="/usr/bin/wallctl"
     elif [ -x "${HOME}/.cargo/bin/wallctl" ]; then
         WALLCTL_BIN="${HOME}/.cargo/bin/wallctl"
     elif [ -x "${SCRIPT_DIR}/../target/release/wallctl" ]; then
@@ -37,7 +41,7 @@ if [ -z "${WALLCTL_BIN}" ]; then
     elif [ -x "${SCRIPT_DIR}/../target/debug/wallctl" ]; then
         WALLCTL_BIN="${SCRIPT_DIR}/../target/debug/wallctl"
     else
-        echo "Error: wallctl not found in PATH, ~/.cargo/bin, or target/{release,debug}" >&2
+        echo "Error: wallctl not found in PATH, /usr/local/bin, /usr/bin, ~/.cargo/bin, or target/{release,debug}" >&2
         exit 1
     fi
 fi

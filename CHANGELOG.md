@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-09-07
+
+### Added
+- **Event-Driven Idle Rendering (0.0% Idle CPU)**:
+  - Added `fn is_animated(&self) -> bool` to `WallpaperRenderer` trait.
+  - Implemented animation detection in `SolidColorRenderer` and `ImageRenderer` (returns `false` for static colors and images without pan or parallax).
+  - Optimized `OutputSurface::render_frame` to stop requesting Wayland frame callbacks (`wl_surface.frame`) when wallpapers are non-animated, reducing idle CPU usage from ~10% down to **0.0%**.
+  - Event-driven re-rendering upon dynamic property changes (`set_property`), window unpause, or display reconfiguration.
+- **Session State Persistence Across Reboots**:
+  - Atomic state snapshot engine saving active wallpapers, mute status, and custom properties to `$XDG_STATE_HOME/wallrs/state.json`.
+  - Automatic session restoration on daemon startup and output reconnection.
+  - Added `--no-restore` and `--state-file` CLI arguments to `wallrsd`.
+- **Manifest Thumbnail & Representative Preview**:
+  - Optional `thumbnail` metadata field in `wallpaper.toml` (`[wallpaper]` block).
+  - Added `wallctl preview [--output <NAME>] [--snapshot]` to query canonical image paths or capture live GPU screenshot fallbacks.
+  - Added `contrib/hyprland-matugen.sh` (Material You theming) and `contrib/kde-accent-color.sh` (KDE Plasma 6 accent color sync).
+- **Desktop Integration & Systemd Services**:
+  - Added `wallrs-theme-sync.service` and `wallrs-theme-sync.path` with inotify tracking over `state.json` to synchronize accent colors automatically across KDE Plasma and Hyprland.
+  - Added `wallrs-auto-pause.service` and `wallrs-auto-pause.sh` desktop-agnostic dispatcher for automatic window occlusion pause on KDE Plasma 6 (KWin D-Bus) and Hyprland (socket2).
+- **Packaging & Metadata**:
+  - Validated FreeDesktop AppStream metainfo specification (`extra/metainfo/com.asdrome.wallrs.metainfo.xml`).
+  - Standardized Asdrome organization URLs and package metadata across Debian, RPM, and Arch Linux packages.
+
 ## [1.0.0] - 2026-09-07
 
 ### Added

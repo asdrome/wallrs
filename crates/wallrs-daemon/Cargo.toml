@@ -3,6 +3,9 @@ name = "wallrs-daemon"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Wayland live wallpaper daemon"
 
 [[bin]]
@@ -45,6 +48,56 @@ assets = [
     [
         "../../extra/systemd/wallrsd.service",
         "usr/lib/systemd/user/wallrsd.service",
+        "644",
+    ],
+    [
+        "../../extra/systemd/wallrs-theme-sync.path",
+        "usr/lib/systemd/user/wallrs-theme-sync.path",
+        "644",
+    ],
+    [
+        "../../extra/systemd/wallrs-theme-sync.service",
+        "usr/lib/systemd/user/wallrs-theme-sync.service",
+        "644",
+    ],
+    [
+        "../../extra/systemd/wallrs-auto-pause.service",
+        "usr/lib/systemd/user/wallrs-auto-pause.service",
+        "644",
+    ],
+    [
+        "../../contrib/wallrs-theme-sync.sh",
+        "usr/share/wallrs/contrib/wallrs-theme-sync.sh",
+        "755",
+    ],
+    [
+        "../../contrib/wallrs-auto-pause.sh",
+        "usr/share/wallrs/contrib/wallrs-auto-pause.sh",
+        "755",
+    ],
+    [
+        "../../contrib/kde-accent-color.sh",
+        "usr/share/wallrs/contrib/kde-accent-color.sh",
+        "755",
+    ],
+    [
+        "../../contrib/hyprland-matugen.sh",
+        "usr/share/wallrs/contrib/hyprland-matugen.sh",
+        "755",
+    ],
+    [
+        "../../contrib/kde-auto-pause.sh",
+        "usr/share/wallrs/contrib/kde-auto-pause.sh",
+        "755",
+    ],
+    [
+        "../../contrib/hyprland-auto-pause.sh",
+        "usr/share/wallrs/contrib/hyprland-auto-pause.sh",
+        "755",
+    ],
+    [
+        "../../extra/metainfo/com.asdrome.wallrs.metainfo.xml",
+        "usr/share/metainfo/com.asdrome.wallrs.metainfo.xml",
         "644",
     ],
     [

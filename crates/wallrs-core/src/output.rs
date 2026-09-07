@@ -46,6 +46,7 @@ pub struct OutputSurface {
     pub audio_handle: Option<wallrs_audio::SpectrumHandle>,
     pub audio_track: Option<wallrs_audio::BackgroundAudioPlayer>,
     pub audio_muted: bool,
+    pub current_wallpaper: Option<std::path::PathBuf>,
 }
 
 /// Bundles WGPU rendering context references passed to output configuration.
@@ -83,6 +84,7 @@ impl OutputSurface {
             audio_handle: None,
             audio_track: None,
             audio_muted: true,
+            current_wallpaper: None,
         }
     }
 
@@ -297,14 +299,32 @@ impl OutputSurface {
         queue.present(surface_texture);
         self.last_rendered_frame_time = Some(now);
 
-        // Only request next frame callback if not currently paused
-        if !self.is_paused() {
+        // Only request next frame callback if not currently paused and renderer is animated.
+        // Static wallpapers (solid colors, static images) render their initial frame once
+        // and stop requesting callbacks, dropping idle CPU and GPU usage to 0.0%.
+        let is_animated = self
+            .renderer
+            .as_ref()
+            .map(|r| r.is_animated())
+            .unwrap_or(false);
+        if is_animated && !self.is_paused() {
             self.layer_surface.wl_surface().frame(
                 qh,
                 FrameCallbackData(self.layer_surface.wl_surface().clone()),
             );
         }
         self.layer_surface.commit();
+    }
+
+    /// Requests a single frame callback from the compositor if configured and not paused.
+    pub fn request_frame(&self, qh: &QueueHandle<EngineState>) {
+        if self.configured && !self.is_paused() {
+            self.layer_surface.wl_surface().frame(
+                qh,
+                FrameCallbackData(self.layer_surface.wl_surface().clone()),
+            );
+            self.layer_surface.commit();
+        }
     }
 
     /// Replaces the active wallpaper renderer on this output.
@@ -369,13 +389,7 @@ impl OutputSurface {
         if let Some(player) = &mut self.audio_track {
             let _ = player.set_property(key, value);
         }
-        if self.configured && !self.is_paused() {
-            self.layer_surface.wl_surface().frame(
-                qh,
-                FrameCallbackData(self.layer_surface.wl_surface().clone()),
-            );
-            self.layer_surface.commit();
-        }
+        self.request_frame(qh);
         Ok(())
     }
 
@@ -412,12 +426,8 @@ impl OutputSurface {
                 player.set_paused(is_paused);
             }
         }
-        if was_paused && !is_paused && self.configured {
-            self.layer_surface.wl_surface().frame(
-                qh,
-                FrameCallbackData(self.layer_surface.wl_surface().clone()),
-            );
-            self.layer_surface.commit();
+        if was_paused && !is_paused {
+            self.request_frame(qh);
         }
     }
 
@@ -435,12 +445,8 @@ impl OutputSurface {
                 player.set_paused(is_paused);
             }
         }
-        if was_paused && !is_paused && self.configured {
-            self.layer_surface.wl_surface().frame(
-                qh,
-                FrameCallbackData(self.layer_surface.wl_surface().clone()),
-            );
-            self.layer_surface.commit();
+        if was_paused && !is_paused {
+            self.request_frame(qh);
         }
     }
 

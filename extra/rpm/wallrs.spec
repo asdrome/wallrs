@@ -1,10 +1,10 @@
 Name:           wallrs
-Version:        1.0.0
+Version:        1.1.0
 Release:        1%{?dist}
 Summary:        High-performance Wayland live wallpaper daemon and CLI controller
 
 License:        MIT OR Apache-2.0
-URL:            https://github.com/asdromundo/wallrs
+URL:            https://github.com/asdrome/wallrs
 Source0:        %{url}/archive/v%{version}/%{name}-%{version}.tar.gz
 
 # Build dependencies (required only during RPM compilation)
@@ -40,6 +40,12 @@ cargo build --release --locked
 install -Dm755 target/release/wallrsd %{buildroot}%{_bindir}/wallrsd
 install -Dm755 target/release/wallctl %{buildroot}%{_bindir}/wallctl
 install -Dm644 extra/systemd/wallrsd.service %{buildroot}%{_userunitdir}/wallrsd.service
+install -Dm644 extra/systemd/wallrs-theme-sync.path %{buildroot}%{_userunitdir}/wallrs-theme-sync.path
+install -Dm644 extra/systemd/wallrs-theme-sync.service %{buildroot}%{_userunitdir}/wallrs-theme-sync.service
+install -Dm644 extra/systemd/wallrs-auto-pause.service %{buildroot}%{_userunitdir}/wallrs-auto-pause.service
+install -d %{buildroot}%{_datadir}/%{name}/contrib
+install -m755 contrib/*.sh %{buildroot}%{_datadir}/%{name}/contrib/
+install -Dm644 extra/metainfo/com.asdrome.wallrs.metainfo.xml %{buildroot}%{_metainfodir}/com.asdrome.wallrs.metainfo.xml
 install -Dm644 LICENSE-MIT %{buildroot}%{_datadir}/licenses/%{name}/LICENSE-MIT
 install -Dm644 LICENSE-APACHE %{buildroot}%{_datadir}/licenses/%{name}/LICENSE-APACHE
 install -Dm644 README.md %{buildroot}%{_docdir}/%{name}/README.md
@@ -53,6 +59,11 @@ cargo test --workspace --locked
 %{_bindir}/wallrsd
 %{_bindir}/wallctl
 %{_userunitdir}/wallrsd.service
+%{_userunitdir}/wallrs-theme-sync.path
+%{_userunitdir}/wallrs-theme-sync.service
+%{_userunitdir}/wallrs-auto-pause.service
+%{_datadir}/%{name}/contrib
+%{_metainfodir}/com.asdrome.wallrs.metainfo.xml
 
 %changelog
 * Sun Sep 06 2026 Antonio S. Dromundo <sebastiandromundo@outlook.com> - 0.1.0-1

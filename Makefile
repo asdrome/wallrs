@@ -57,12 +57,33 @@ changelog:
 		echo "CHANGELOG.md generated from git log"; \
 	fi
 
-install: build
+SHAREDIR ?= $(PREFIX)/share/wallrs
+
+install:
+	@if [ ! -f target/release/wallrsd ] || [ ! -f target/release/wallctl ]; then \
+		if command -v $(CARGO) >/dev/null 2>&1; then \
+			$(CARGO) build --release; \
+		elif [ -x "$$HOME/.cargo/bin/cargo" ]; then \
+			"$$HOME/.cargo/bin/cargo" build --release; \
+		else \
+			echo "Error: Binaries not found in target/release/ and 'cargo' was not found in PATH." >&2; \
+			echo "Please run 'make' or 'cargo build --release' as your normal user first." >&2; \
+			exit 1; \
+		fi \
+	fi
 	install -d $(DESTDIR)$(BINDIR)
 	install -m 755 target/release/wallrsd $(DESTDIR)$(BINDIR)/wallrsd
 	install -m 755 target/release/wallctl $(DESTDIR)$(BINDIR)/wallctl
 	install -d $(DESTDIR)$(SYSTEMD_USER_DIR)
-	install -m 644 extra/systemd/wallrsd.service $(DESTDIR)$(SYSTEMD_USER_DIR)/wallrsd.service
+	sed -e 's|/usr/bin|$(BINDIR)|g' extra/systemd/wallrsd.service > $(DESTDIR)$(SYSTEMD_USER_DIR)/wallrsd.service
+	chmod 644 $(DESTDIR)$(SYSTEMD_USER_DIR)/wallrsd.service
+	install -m 644 extra/systemd/wallrs-theme-sync.path $(DESTDIR)$(SYSTEMD_USER_DIR)/wallrs-theme-sync.path
+	sed -e 's|/usr/share/wallrs|$(SHAREDIR)|g' extra/systemd/wallrs-theme-sync.service > $(DESTDIR)$(SYSTEMD_USER_DIR)/wallrs-theme-sync.service
+	chmod 644 $(DESTDIR)$(SYSTEMD_USER_DIR)/wallrs-theme-sync.service
+	sed -e 's|/usr/share/wallrs|$(SHAREDIR)|g' extra/systemd/wallrs-auto-pause.service > $(DESTDIR)$(SYSTEMD_USER_DIR)/wallrs-auto-pause.service
+	chmod 644 $(DESTDIR)$(SYSTEMD_USER_DIR)/wallrs-auto-pause.service
+	install -d $(DESTDIR)$(SHAREDIR)/contrib
+	install -m 755 contrib/*.sh $(DESTDIR)$(SHAREDIR)/contrib/
 	install -d $(DESTDIR)$(DOCDIR)
 	install -m 644 README.md $(DESTDIR)$(DOCDIR)/README.md
 	install -d $(DESTDIR)$(LICDIR)
@@ -73,6 +94,10 @@ uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/wallrsd
 	rm -f $(DESTDIR)$(BINDIR)/wallctl
 	rm -f $(DESTDIR)$(SYSTEMD_USER_DIR)/wallrsd.service
+	rm -f $(DESTDIR)$(SYSTEMD_USER_DIR)/wallrs-theme-sync.path
+	rm -f $(DESTDIR)$(SYSTEMD_USER_DIR)/wallrs-theme-sync.service
+	rm -f $(DESTDIR)$(SYSTEMD_USER_DIR)/wallrs-auto-pause.service
+	rm -rf $(DESTDIR)$(SHAREDIR)
 	rm -rf $(DESTDIR)$(DOCDIR)
 	rm -rf $(DESTDIR)$(LICDIR)
 

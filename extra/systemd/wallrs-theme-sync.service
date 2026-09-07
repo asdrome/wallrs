@@ -1,0 +1,14 @@
+[Unit]
+Description=Synchronize desktop theme and accent color from active wallrs wallpaper
+Documentation=https://github.com/asdrome/wallrs
+PartOf=graphical-session.target
+After=graphical-session.target wallrsd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/share/wallrs/contrib/wallrs-theme-sync.sh
+PassEnvironment=WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP
+TimeoutSec=15
+StandardOutput=journal
+StandardError=journal
+

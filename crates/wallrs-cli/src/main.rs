@@ -61,11 +61,29 @@ enum Subcommands {
     /// Take a screenshot of the current wallpaper on an output and save it to an image file
     Screenshot(ScreenshotArgs),
 
+    /// Get the representative preview image path for an output (resolves thumbnail or captures live snapshot)
+    Preview(PreviewArgs),
+
     /// Validate and lint a wallpaper folder or wallpaper.toml manifest
     Validate(ValidateArgs),
 
     /// Gracefully terminate the wallrsd daemon
     Kill,
+}
+
+#[derive(Args, Debug)]
+struct PreviewArgs {
+    /// Target output name (defaults to first active output)
+    #[arg(short, long)]
+    output: Option<String>,
+
+    /// Force capturing a live GPU snapshot instead of returning static thumbnail/image
+    #[arg(long)]
+    snapshot: bool,
+
+    /// Output path for snapshot fallback (defaults to $XDG_RUNTIME_DIR/wallrs/preview-<output>.png)
+    #[arg(long)]
+    out_path: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -205,15 +223,31 @@ fn print_outputs_table(outputs: &[OutputInfoProto]) {
     }
 
     println!(
-        "{:<15} {:<15} {:<10} {:<10}",
-        "OUTPUT", "RESOLUTION", "STATUS", "AUDIO"
+        "{:<15} {:<15} {:<10} {:<10} {:<25}",
+        "OUTPUT", "RESOLUTION", "STATUS", "AUDIO", "WALLPAPER"
     );
-    println!("{:-<15} {:-<15} {:-<10} {:-<10}", "", "", "", "");
+    println!(
+        "{:-<15} {:-<15} {:-<10} {:-<10} {:-<25}",
+        "", "", "", "", ""
+    );
     for out in outputs {
         let res = format!("{}x{}", out.width, out.height);
         let status = if out.paused { "Paused" } else { "Active" };
         let audio = if out.muted { "Muted" } else { "Unmuted" };
-        println!("{:<15} {:<15} {:<10} {:<10}", out.name, res, status, audio);
+        let wall = out
+            .wallpaper
+            .as_ref()
+            .map(|p| {
+                p.file_name()
+                    .or_else(|| p.parent().and_then(|parent| parent.file_name()))
+                    .map(|f| f.to_string_lossy().to_string())
+                    .unwrap_or_else(|| p.to_string_lossy().to_string())
+            })
+            .unwrap_or_else(|| "(solid color)".into());
+        println!(
+            "{:<15} {:<15} {:<10} {:<10} {:<25}",
+            out.name, res, status, audio, wall
+        );
     }
 }
 
@@ -438,12 +472,156 @@ fn send_command(socket_path: &Path, cmd: &Command) -> Result<Response, String> {
         .map_err(|e| format!("Failed to parse response from wallrsd: {e} (raw: {trimmed})"))
 }
 
+fn handle_preview(socket_path: &Path, args: PreviewArgs) -> Result<(), String> {
+    let resp = send_command(socket_path, &Command::ListOutputs)?;
+    let outputs = match resp {
+        Response::Outputs(outs) => outs,
+        Response::Error(e) => return Err(format!("Daemon error: {e}")),
+        Response::Ok => return Err("Unexpected response from daemon".into()),
+    };
+
+    if outputs.is_empty() {
+        return Err("No active Wayland display outputs found".into());
+    }
+
+    let target = if let Some(name) = &args.output {
+        outputs.iter().find(|o| o.name == *name).ok_or_else(|| {
+            format!(
+                "Output '{name}' not found. Available outputs: {}",
+                outputs
+                    .iter()
+                    .map(|o| o.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })?
+    } else {
+        &outputs[0]
+    };
+
+    let fallback_path = || -> PathBuf {
+        if let Some(path) = &args.out_path {
+            return path.clone();
+        }
+        let base = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("XDG_CACHE_HOME")
+                    .map(PathBuf::from)
+                    .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+            })
+            .unwrap_or_else(std::env::temp_dir);
+        let dir = base.join("wallrs");
+        let _ = std::fs::create_dir_all(&dir);
+        dir.join(format!("preview-{}.png", target.name))
+    };
+
+    if args.snapshot {
+        let out_img = fallback_path();
+        let shot_cmd = Command::Screenshot {
+            output: target.name.clone(),
+            path: out_img.clone(),
+        };
+        match send_command(socket_path, &shot_cmd)? {
+            Response::Ok => {
+                println!("{}", out_img.display());
+                return Ok(());
+            }
+            Response::Error(e) => return Err(format!("Failed to capture screenshot: {e}")),
+            _ => return Err("Unexpected response taking screenshot".into()),
+        }
+    }
+
+    if let Some(wall_path) = &target.wallpaper {
+        let is_image_ext = wall_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| {
+                matches!(
+                    ext.to_ascii_lowercase().as_str(),
+                    "png" | "jpg" | "jpeg" | "webp"
+                )
+            });
+        if is_image_ext && wall_path.exists() {
+            println!(
+                "{}",
+                wall_path
+                    .canonicalize()
+                    .unwrap_or_else(|_| wall_path.clone())
+                    .display()
+            );
+            return Ok(());
+        }
+
+        let manifest_file = if wall_path.is_dir() {
+            wall_path.join("wallpaper.toml")
+        } else {
+            wall_path.clone()
+        };
+
+        if manifest_file.exists() {
+            let base_dir = manifest_file.parent().unwrap_or_else(|| Path::new("."));
+            if let Ok(manifest) = wallrs_proto::WallpaperManifest::from_file(&manifest_file) {
+                if let Some(thumb) = &manifest.wallpaper.thumbnail {
+                    let thumb_path = if thumb.is_absolute() {
+                        thumb.clone()
+                    } else {
+                        base_dir.join(thumb)
+                    };
+                    if thumb_path.exists() {
+                        println!(
+                            "{}",
+                            thumb_path.canonicalize().unwrap_or(thumb_path).display()
+                        );
+                        return Ok(());
+                    }
+                }
+
+                if let Some(img_cfg) = &manifest.image
+                    && let Some(first) = img_cfg.layers.first()
+                {
+                    let layer_path = if first.path.is_absolute() {
+                        first.path.clone()
+                    } else {
+                        base_dir.join(&first.path)
+                    };
+                    if layer_path.exists() {
+                        println!(
+                            "{}",
+                            layer_path.canonicalize().unwrap_or(layer_path).display()
+                        );
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+
+    let out_img = fallback_path();
+    let shot_cmd = Command::Screenshot {
+        output: target.name.clone(),
+        path: out_img.clone(),
+    };
+    match send_command(socket_path, &shot_cmd)? {
+        Response::Ok => {
+            println!("{}", out_img.display());
+            Ok(())
+        }
+        Response::Error(e) => Err(format!("Failed to capture fallback preview snapshot: {e}")),
+        _ => Err("Unexpected response taking screenshot".into()),
+    }
+}
+
 fn run() -> Result<(), String> {
     let cli = Cli::parse();
     if let Subcommands::Validate(args) = cli.command {
         return validate_wallpaper(&args.path);
     }
     let socket_path = cli.socket.unwrap_or_else(default_socket_path);
+
+    if let Subcommands::Preview(args) = cli.command {
+        return handle_preview(&socket_path, args);
+    }
 
     let mut unmute_after = false;
     let mut unmute_selector = OutputSelector::All;
@@ -565,7 +743,7 @@ fn run() -> Result<(), String> {
             false,
         ),
         Subcommands::Kill => (Command::Kill, false),
-        Subcommands::Validate(_) => unreachable!(),
+        Subcommands::Validate(_) | Subcommands::Preview(_) => unreachable!(),
     };
 
     let resp = send_command(&socket_path, &cmd)?;
@@ -765,6 +943,41 @@ mod tests {
                 assert_eq!(args.path, PathBuf::from("examples/video-sunset"));
             }
             _ => panic!("Expected Subcommands::SetWallpaper"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_preview() {
+        let cli1 = Cli::try_parse_from(["wallctl", "preview"]).unwrap();
+        match cli1.command {
+            Subcommands::Preview(args) => {
+                assert_eq!(args.output, None);
+                assert!(!args.snapshot);
+                assert_eq!(args.out_path, None);
+            }
+            _ => panic!("Expected Subcommands::Preview"),
+        }
+
+        let cli2 = Cli::try_parse_from([
+            "wallctl",
+            "preview",
+            "-o",
+            "HDMI-A-1",
+            "--snapshot",
+            "--out-path",
+            "/tmp/custom-preview.png",
+        ])
+        .unwrap();
+        match cli2.command {
+            Subcommands::Preview(args) => {
+                assert_eq!(args.output, Some("HDMI-A-1".into()));
+                assert!(args.snapshot);
+                assert_eq!(
+                    args.out_path,
+                    Some(PathBuf::from("/tmp/custom-preview.png"))
+                );
+            }
+            _ => panic!("Expected Subcommands::Preview"),
         }
     }
 }

@@ -1,14 +1,11 @@
 [Unit]
-Description=wallrs live wallpaper daemon
+Description=Watch wallrs state changes to synchronize desktop theme and accent color
 Documentation=https://github.com/asdrome/wallrs
 PartOf=graphical-session.target
 After=graphical-session.target
 
-[Service]
-Type=simple
-ExecStart=/usr/bin/wallrsd
-Restart=on-failure
-RestartSec=1s
+[Path]
+PathChanged=%h/.local/state/wallrs/state.json
 
 [Install]
 WantedBy=graphical-session.target

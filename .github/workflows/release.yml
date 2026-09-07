@@ -48,10 +48,11 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME:-v1.0.0}"
           DIST_NAME="wallrs-${VERSION}-x86_64-unknown-linux-gnu"
-          mkdir -p "${DIST_NAME}"
+          mkdir -p "${DIST_NAME}/systemd" "${DIST_NAME}/contrib"
           cp target/release/wallrsd "${DIST_NAME}/"
           cp target/release/wallctl "${DIST_NAME}/"
-          cp extra/systemd/wallrsd.service "${DIST_NAME}/"
+          cp extra/systemd/* "${DIST_NAME}/systemd/"
+          cp contrib/*.sh "${DIST_NAME}/contrib/"
           cp README.md LICENSE-MIT LICENSE-APACHE "${DIST_NAME}/"
           tar -czf "${DIST_NAME}.tar.gz" "${DIST_NAME}"
           sha256sum "${DIST_NAME}.tar.gz" > "${DIST_NAME}.tar.gz.sha256"
@@ -109,7 +110,7 @@ jobs:
           rpmbuild -ba ~/rpmbuild/SPECS/wallrs.spec
 
           mkdir -p dist-rpm
-          find ~/rpmbuild/RPMS ~/rpmbuild/SRPMS -type f -name "*.rpm" -exec cp {} dist-rpm/ \;
+          find ~/rpmbuild/RPMS ~/rpmbuild/SRPMS -type f -name "*.rpm" ! -name "*debuginfo*" ! -name "*debugsource*" -exec cp {} dist-rpm/ \;
 
       - name: Upload RPM artifacts
         uses: actions/upload-artifact@v4

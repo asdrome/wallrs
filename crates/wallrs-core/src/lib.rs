@@ -1,10 +1,12 @@
 pub mod engine;
 pub mod ipc;
 pub mod output;
+pub mod state;
 
 pub use engine::{Engine, EngineError, EngineState};
 pub use ipc::{IpcError, bind_socket, register_ipc_source};
 pub use output::{OutputError, OutputSurface};
+pub use state::{SavedOutputConfig, StateSnapshot, default_state_path, load_state, save_state};
 pub use wallrs_proto as proto;
 pub use wallrs_render as render;
 
@@ -16,6 +18,8 @@ pub struct EngineConfig {
     pub fullscreen_pause: bool,
     pub pause_on_maximized: bool,
     pub allow_audio: bool,
+    pub restore_state: bool,
+    pub state_path: Option<std::path::PathBuf>,
 }
 
 impl Default for EngineConfig {
@@ -26,6 +30,8 @@ impl Default for EngineConfig {
             fullscreen_pause: true,
             pause_on_maximized: true,
             allow_audio: false,
+            restore_state: true,
+            state_path: None,
         }
     }
 }
@@ -41,6 +47,8 @@ mod tests {
         assert!(config.max_fps.is_none());
         assert!(config.fullscreen_pause);
         assert!(config.pause_on_maximized);
+        assert!(config.restore_state);
+        assert!(config.state_path.is_none());
     }
 
     #[test]

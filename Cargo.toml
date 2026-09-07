@@ -13,11 +13,12 @@ members = [
 ]
 
 [workspace.package]
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["Antonio S. Dromundo <sebastiandromundo@outlook.com>"]
-repository = "https://github.com/asdromundo/wallrs"
+repository = "https://github.com/asdrome/wallrs"
+homepage = "https://github.com/asdrome/wallrs"
 readme = "README.md"
 
 [workspace.dependencies]
