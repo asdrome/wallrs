@@ -312,6 +312,7 @@ loop = true
 
 Because KDE Plasma 6 does not expose `zwlr_foreign_toplevel_manager_v1` and tiling window managers (Hyprland, Sway) rarely leave windows in maximized/fullscreen states, optional helper scripts are provided in [`contrib/`](contrib/):
 
+- **[`contrib/wallrs-theme-sync.sh`](contrib/wallrs-theme-sync.sh)**: Desktop-agnostic theming dispatcher managed by `wallrs-theme-sync.path`. Synchronizes desktop accent color and palette from active wallpapers on KDE Plasma (via `kde-accent-color.sh`) or Hyprland/wlroots (via Matugen).
 - **[`contrib/wallrs-auto-pause.sh`](contrib/wallrs-auto-pause.sh)**: Desktop-agnostic auto-pause dispatcher managed by `wallrs-auto-pause.service`. Automatically runs the appropriate driver for KDE Plasma or Hyprland, and idles gracefully on Sway/wlroots.
 - **[`contrib/hyprland-auto-pause.sh`](contrib/hyprland-auto-pause.sh)**: Watches Hyprland's IPC socket2 event stream and pauses rendering when windows occupy the active workspace.
 - **[`contrib/kde-auto-pause.sh`](contrib/kde-auto-pause.sh)**: Monitors KWin's D-Bus interface to pause rendering when windows cover the screen (maximized/fullscreen) and resume when the desktop is exposed (`Meta+D` or floating).
