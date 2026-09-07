@@ -90,7 +90,9 @@ jobs:
             systemd-rpm-macros \
             rpm-build \
             git \
-            tar
+            tar \
+            clang \
+            clang-devel
 
       - name: Build RPM and SRPM
         run: |
