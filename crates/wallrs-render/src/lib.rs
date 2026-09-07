@@ -58,6 +58,15 @@ pub trait WallpaperRenderer: Send {
         Ok(())
     }
 
+    /// Returns whether this wallpaper is continuously animated.
+    ///
+    /// Static wallpapers (solid colors, static images without pan or parallax) return `false`.
+    /// When `false`, the engine renders an initial frame and stops requesting frame callbacks,
+    /// dropping idle CPU and GPU usage to 0.0%.
+    fn is_animated(&self) -> bool {
+        true
+    }
+
     /// Tears down any allocated resources.
     fn teardown(&mut self) {}
 }
@@ -164,6 +173,10 @@ impl WallpaperRenderer for SolidColorRenderer {
         }
         Err(RendererError::PropertyNotFound(key.to_string()))
     }
+
+    fn is_animated(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]
@@ -173,6 +186,7 @@ mod tests {
     #[test]
     fn test_solid_color_renderer_properties() {
         let mut renderer = SolidColorRenderer::default();
+        assert!(!renderer.is_animated());
         assert_eq!(renderer.color, [0.059, 0.090, 0.165, 1.0]);
 
         renderer.resize(1920, 1080);
