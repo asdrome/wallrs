@@ -40,7 +40,7 @@ cargo build --release --locked
 install -Dm755 target/release/wallrsd %{buildroot}%{_bindir}/wallrsd
 install -Dm755 target/release/wallctl %{buildroot}%{_bindir}/wallctl
 install -Dm644 extra/systemd/wallrsd.service %{buildroot}%{_userunitdir}/wallrsd.service
-install -Dm644 extra/metainfo/org.asdrome.wallrs.metainfo.xml %{buildroot}%{_metainfodir}/org.asdrome.wallrs.metainfo.xml
+install -Dm644 extra/metainfo/com.asdrome.wallrs.metainfo.xml %{buildroot}%{_metainfodir}/com.asdrome.wallrs.metainfo.xml
 install -Dm644 LICENSE-MIT %{buildroot}%{_datadir}/licenses/%{name}/LICENSE-MIT
 install -Dm644 LICENSE-APACHE %{buildroot}%{_datadir}/licenses/%{name}/LICENSE-APACHE
 install -Dm644 README.md %{buildroot}%{_docdir}/%{name}/README.md
@@ -54,7 +54,7 @@ cargo test --workspace --locked
 %{_bindir}/wallrsd
 %{_bindir}/wallctl
 %{_userunitdir}/wallrsd.service
-%{_metainfodir}/org.asdrome.wallrs.metainfo.xml
+%{_metainfodir}/com.asdrome.wallrs.metainfo.xml
 
 %changelog
 * Sun Sep 06 2026 Antonio S. Dromundo <sebastiandromundo@outlook.com> - 0.1.0-1

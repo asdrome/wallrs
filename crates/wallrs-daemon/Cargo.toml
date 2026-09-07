@@ -51,8 +51,8 @@ assets = [
         "644",
     ],
     [
-        "../../extra/metainfo/org.asdrome.wallrs.metainfo.xml",
-        "usr/share/metainfo/org.asdrome.wallrs.metainfo.xml",
+        "../../extra/metainfo/com.asdrome.wallrs.metainfo.xml",
+        "usr/share/metainfo/com.asdrome.wallrs.metainfo.xml",
         "644",
     ],
     [

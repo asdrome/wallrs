@@ -743,6 +743,7 @@ impl EngineState {
                     };
                     let solid = Box::new(wallrs_render::SolidColorRenderer::new(color));
                     let _ = out.set_renderer(solid, &gpu, &self.qh);
+                    out.current_wallpaper = None;
                     out.audio_track = None;
                     out.audio_handle = None;
                 }

@@ -114,6 +114,7 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                     height: out.height,
                     paused: out.is_paused(),
                     muted: out.audio_muted,
+                    wallpaper: out.current_wallpaper.clone(),
                 })
                 .collect();
             Response::Outputs(list)
@@ -143,11 +144,12 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                             device: &state.wgpu_device,
                             queue: &state.wgpu_queue,
                         };
-                        let solid = Box::new(wallrs_render::SolidColorRenderer::new(c));
-                        if let Err(e) = out.set_renderer(solid, &gpu, &state.qh) {
+                        let renderer = Box::new(wallrs_render::SolidColorRenderer::new(c));
+                        if let Err(e) = out.set_renderer(renderer, &gpu, &state.qh) {
                             error = Some(e.to_string());
                             break;
                         }
+                        out.current_wallpaper = None;
                         out.audio_track = None;
                         out.audio_handle = None;
                         continue;
@@ -514,6 +516,7 @@ pub fn apply_wallpaper(
                         error = Some(e.to_string());
                         break;
                     }
+                    out.current_wallpaper = Some(manifest_path.to_path_buf());
                     out.audio_handle = None;
 
                     if let Some(audio_cfg) = &manifest.audio {
@@ -594,6 +597,7 @@ pub fn apply_wallpaper(
                         error = Some(e.to_string());
                         break;
                     }
+                    out.current_wallpaper = Some(manifest_path.to_path_buf());
                     out.audio_handle = audio_handle.clone();
 
                     if let Some(audio_cfg) = &manifest.audio {
@@ -671,6 +675,7 @@ pub fn apply_wallpaper(
                         error = Some(e.to_string());
                         break;
                     }
+                    out.current_wallpaper = Some(manifest_path.to_path_buf());
                     if !state.allow_audio {
                         if let Some(r) = &mut out.renderer {
                             let _ = r.set_property("mute", wallrs_proto::PropertyValue::Bool(true));

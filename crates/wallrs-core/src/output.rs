@@ -46,6 +46,7 @@ pub struct OutputSurface {
     pub audio_handle: Option<wallrs_audio::SpectrumHandle>,
     pub audio_track: Option<wallrs_audio::BackgroundAudioPlayer>,
     pub audio_muted: bool,
+    pub current_wallpaper: Option<std::path::PathBuf>,
 }
 
 /// Bundles WGPU rendering context references passed to output configuration.
@@ -83,6 +84,7 @@ impl OutputSurface {
             audio_handle: None,
             audio_track: None,
             audio_muted: true,
+            current_wallpaper: None,
         }
     }
 

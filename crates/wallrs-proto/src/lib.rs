@@ -59,6 +59,8 @@ pub struct OutputInfoProto {
     pub paused: bool,
     #[serde(default)]
     pub muted: bool,
+    #[serde(default)]
+    pub wallpaper: Option<PathBuf>,
 }
 
 /// Responses emitted by `wallrsd` over the control Unix domain socket.
@@ -97,6 +99,8 @@ pub struct WallpaperManifest {
 pub struct WallpaperMeta {
     pub r#type: String, // "image", "shader", "video"
     pub name: String,
+    #[serde(default)]
+    pub thumbnail: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -237,6 +241,7 @@ mod tests {
             height: 1080,
             paused: false,
             muted: false,
+            wallpaper: Some(PathBuf::from("/path/to/wallpaper")),
         }]);
         let json = serde_json::to_string(&resp).unwrap();
         let parsed: Response = serde_json::from_str(&json).unwrap();
@@ -309,5 +314,25 @@ loop = true
         assert_eq!(audio.path, PathBuf::from("ambient.ogg"));
         assert_eq!(audio.volume, Some(35.5));
         assert_eq!(audio.r#loop, Some(true));
+    }
+
+    #[test]
+    fn test_wallpaper_manifest_with_thumbnail() {
+        let toml_data = r#"
+[wallpaper]
+type = "shader"
+name = "cyber-grid"
+thumbnail = "thumb.png"
+
+[shader]
+entry = "main.wgsl"
+"#;
+
+        let manifest = WallpaperManifest::from_toml_str(toml_data).expect("failed to parse TOML");
+        assert_eq!(manifest.wallpaper.name, "cyber-grid");
+        assert_eq!(
+            manifest.wallpaper.thumbnail,
+            Some(PathBuf::from("thumb.png"))
+        );
     }
 }

@@ -42,3 +42,28 @@ Injects a lightweight KWin 6 script via KWin's D-Bus `/Scripting` interface to m
 - **Default Behavior**: Pauses rendering when a window is maximized or fullscreen on the active desktop. Resumes rendering when windows are restored to floating mode, minimized, or when "Show Desktop" (`Meta+D`) is activated.
 - **KDE autostart**: Add to **System Settings -> Autostart -> Add Login Script**, or launch from `~/.config/plasma-workspace/env/`.
 
+---
+
+### 3. `hyprland-matugen.sh` (Material You System Theming)
+Connects `wallrs` to [Matugen](https://github.com/InioX/matugen) to automatically theme Hyprland, Waybar, Mako, and terminal emulators.
+
+- **Workflow**: Calls `wallctl preview` to resolve the current representative image (image wallpaper, manifest thumbnail, or live GPU snapshot for procedural shaders/videos), then passes it to `matugen image`.
+- **Usage**:
+  ```bash
+  # Apply current wallpaper colors to your Matugen templates
+  ./contrib/hyprland-matugen.sh
+
+  # Force a live snapshot even if a thumbnail exists
+  ./contrib/hyprland-matugen.sh --snapshot
+  ```
+
+### 4. `kde-accent-color.sh` (KDE Plasma 6 Accent Color)
+Connects `wallrs` to KDE Plasma's native accent color manager.
+
+- **Workflow**: Calls `wallctl preview`, extracts the dominant vibrant color via Python/Pillow (or ImageMagick), and writes the RGB value to `kdeglobals` via `kwriteconfig6` before triggering a live KWin/Plasma reload.
+- **Usage**:
+  ```bash
+  # Apply current wallpaper color to KDE Plasma 6 accent color
+  ./contrib/kde-accent-color.sh
+  ```
+

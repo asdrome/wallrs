@@ -40,7 +40,7 @@ package() {
     install -Dm755 target/release/wallrsd "$pkgdir/usr/bin/wallrsd"
     install -Dm755 target/release/wallctl "$pkgdir/usr/bin/wallctl"
     install -Dm644 extra/systemd/wallrsd.service "$pkgdir/usr/lib/systemd/user/wallrsd.service"
-    install -Dm644 extra/metainfo/org.asdrome.wallrs.metainfo.xml "$pkgdir/usr/share/metainfo/org.asdrome.wallrs.metainfo.xml"
+    install -Dm644 extra/metainfo/com.asdrome.wallrs.metainfo.xml "$pkgdir/usr/share/metainfo/com.asdrome.wallrs.metainfo.xml"
     install -Dm644 LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
     install -Dm644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
     install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
