@@ -88,12 +88,12 @@ fn parse_color(s: &str) -> Result<[f32; 4], String> {
 }
 
 fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+    let max_level = std::env::var("RUST_LOG")
+        .ok()
+        .and_then(|s| s.parse::<tracing::Level>().ok())
+        .unwrap_or(tracing::Level::INFO);
+
+    tracing_subscriber::fmt().with_max_level(max_level).init();
 
     let args = Args::parse();
     let initial_color = match parse_color(&args.color) {

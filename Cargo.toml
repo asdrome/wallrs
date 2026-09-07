@@ -26,7 +26,6 @@ arc-swap = "1.7"
 calloop = "0.14"
 clap = { version = "4.5", features = ["derive"] }
 pipewire = "0.10"
-rustfft = "6.4"
 image = { version = "0.25", default-features = false, features = [
     "png",
     "jpeg",
@@ -46,9 +45,12 @@ smithay-client-toolkit = { version = "0.21.1", default-features = true, features
 ] }
 thiserror = "2.0"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
 wayland-client = { version = "0.31", default-features = true, features = [
     "system",
 ] }
 wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
 wgpu = "30"
+
+[profile.release]
+strip = "debuginfo"

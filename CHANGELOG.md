@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-09-07
+
+### Fixed
+- **Paused Wallpaper Update**: Fixed an issue where changing wallpapers while playback was paused did not present the new frame until unpaused. Replacing a wallpaper now immediately renders and commits the initial frame to Wayland.
+- **Shader & Video Preview / Screenshot**: Fixed a `wgpu` validation error during `wallctl preview` or screenshot capture on shader and video wallpapers by aligning surface target formats (`Bgra8UnormSrgb`) and isolating render passes.
+- **Automated Theme Synchronization**: Added `--prefer saturation` flag to `matugen` script calls in `contrib/` to eliminate interactive user prompts in non-interactive / systemd execution.
+
+### Performance
+- **Binary Footprint & Dependency Optimization**:
+  - Replaced `rustfft` in `wallrs-audio` with an in-place Radix-2 Cooley-Tukey FFT with precomputed twiddle tables, reducing crate footprint by 89%.
+  - Streamlined `tracing-subscriber` to basic `fmt` without heavy regex automata.
+  - Configured release profile with `strip = "debuginfo"`.
+
 ## [1.1.0] - 2026-09-07
 
 ### Added

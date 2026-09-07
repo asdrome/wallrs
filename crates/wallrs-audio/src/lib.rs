@@ -5,8 +5,6 @@ use pw::spa;
 use pw::spa::param::format::{MediaSubtype, MediaType};
 use pw::spa::param::format_utils;
 use pw::spa::pod::Pod;
-use rustfft::num_complex::Complex;
-use rustfft::{Fft, FftPlanner};
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread::JoinHandle;
@@ -107,19 +105,30 @@ pub struct FftAnalyzer {
     pub fft_size: usize,
     pub sample_rate: f32,
     pub num_bands: usize,
-    fft: Arc<dyn Fft<f32>>,
+    bits: u32,
     window: Vec<f32>,
+    twiddles: Vec<(f32, f32)>,
     band_ranges: Vec<(usize, usize)>,
     smoothed_bands: Vec<f32>,
-    complex_buffer: Vec<Complex<f32>>,
-    scratch_buffer: Vec<Complex<f32>>,
+    re_buffer: Vec<f32>,
+    im_buffer: Vec<f32>,
 }
 
 impl FftAnalyzer {
     pub fn new(fft_size: usize, sample_rate: f32, num_bands: usize) -> Self {
-        let mut planner = FftPlanner::new();
-        let fft = planner.plan_fft_forward(fft_size);
-        let scratch_len = fft.get_inplace_scratch_len();
+        assert!(
+            fft_size.is_power_of_two(),
+            "FftAnalyzer requires power-of-two fft_size (e.g. 512, 1024, 2048)"
+        );
+        let bits = fft_size.trailing_zeros();
+
+        // Precompute twiddle factors for forward FFT: e^(-2*pi*i * k / fft_size)
+        let twiddles: Vec<(f32, f32)> = (0..fft_size / 2)
+            .map(|k| {
+                let angle = -2.0 * std::f32::consts::PI * k as f32 / fft_size as f32;
+                (angle.cos(), angle.sin())
+            })
+            .collect();
 
         // Precompute Hann window: w[n] = 0.5 * (1 - cos(2*pi*n / (N - 1)))
         let window: Vec<f32> = (0..fft_size)
@@ -161,12 +170,13 @@ impl FftAnalyzer {
             fft_size,
             sample_rate,
             num_bands,
-            fft,
+            bits,
             window,
+            twiddles,
             band_ranges,
             smoothed_bands: vec![0.0; num_bands],
-            complex_buffer: vec![Complex::new(0.0, 0.0); fft_size],
-            scratch_buffer: vec![Complex::new(0.0, 0.0); scratch_len],
+            re_buffer: vec![0.0; fft_size],
+            im_buffer: vec![0.0; fft_size],
         }
     }
 
@@ -176,22 +186,53 @@ impl FftAnalyzer {
             return &self.smoothed_bands;
         }
 
-        // Apply Hann window and populate complex buffer
-        for (i, &sample) in samples.iter().enumerate().take(self.fft_size) {
-            self.complex_buffer[i] = Complex::new(sample * self.window[i], 0.0);
+        let n = self.fft_size;
+        let shift = usize::BITS - self.bits;
+
+        // Apply Hann window and bit-reversal permutation directly into real and imaginary buffers
+        for (i, &sample) in samples.iter().enumerate().take(n) {
+            let rev_i = i.reverse_bits() >> shift;
+            self.re_buffer[rev_i] = sample * self.window[i];
+            self.im_buffer[rev_i] = 0.0;
         }
 
-        // Perform in-place forward FFT
-        self.fft
-            .process_with_scratch(&mut self.complex_buffer, &mut self.scratch_buffer);
+        // In-place Radix-2 Cooley-Tukey FFT
+        let mut len = 2;
+        while len <= n {
+            let half = len / 2;
+            let step = n / len;
+            for i in (0..n).step_by(len) {
+                let mut k = 0;
+                for j in 0..half {
+                    let (w_re, w_im) = self.twiddles[k];
+                    let u_re = self.re_buffer[i + j];
+                    let u_im = self.im_buffer[i + j];
+                    let v_re = self.re_buffer[i + j + half];
+                    let v_im = self.im_buffer[i + j + half];
+
+                    // t = w * v
+                    let t_re = w_re * v_re - w_im * v_im;
+                    let t_im = w_re * v_im + w_im * v_re;
+
+                    self.re_buffer[i + j] = u_re + t_re;
+                    self.im_buffer[i + j] = u_im + t_im;
+                    self.re_buffer[i + j + half] = u_re - t_re;
+                    self.im_buffer[i + j + half] = u_im - t_im;
+
+                    k += step;
+                }
+            }
+            len <<= 1;
+        }
 
         // Group into logarithmic bands
-        let norm_factor = 2.0 / self.fft_size as f32;
+        let norm_factor = 2.0 / n as f32;
         for (b, &(start_bin, end_bin)) in self.band_ranges.iter().enumerate() {
             let mut max_mag = 0.0f32;
             for bin in start_bin..end_bin {
-                let c = self.complex_buffer[bin];
-                let mag = (c.re * c.re + c.im * c.im).sqrt() * norm_factor;
+                let re = self.re_buffer[bin];
+                let im = self.im_buffer[bin];
+                let mag = (re * re + im * im).sqrt() * norm_factor;
                 if mag > max_mag {
                     max_mag = mag;
                 }
