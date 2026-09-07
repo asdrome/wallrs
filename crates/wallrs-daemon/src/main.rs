@@ -30,6 +30,14 @@ struct Args {
     #[arg(long)]
     allow_audio: bool,
 
+    /// Disable automatic restoration of the previous session's wallpaper state
+    #[arg(long)]
+    no_restore: bool,
+
+    /// Custom path for the session state file (default: $XDG_STATE_HOME/wallrs/state.json)
+    #[arg(long)]
+    state_file: Option<std::path::PathBuf>,
+
     /// Legacy flag retained for backward compatibility (pause on maximized is now default)
     #[arg(long, hide = true)]
     pause_on_maximized: bool,
@@ -113,6 +121,8 @@ fn main() {
         fullscreen_pause: !args.no_fullscreen_pause,
         pause_on_maximized,
         allow_audio: args.allow_audio,
+        restore_state: !args.no_restore,
+        state_path: args.state_file,
     };
 
     let mut engine = match Engine::with_config(
@@ -181,5 +191,20 @@ mod tests {
         assert_eq!(args.fps, Some(60));
         assert!(args.no_fullscreen_pause);
         assert!(args.no_pause_on_maximized);
+        assert!(!args.no_restore);
+        assert!(args.state_file.is_none());
+
+        let args2 = Args::try_parse_from([
+            "wallrsd",
+            "--no-restore",
+            "--state-file",
+            "/tmp/custom_state.json",
+        ])
+        .unwrap();
+        assert!(args2.no_restore);
+        assert_eq!(
+            args2.state_file,
+            Some(std::path::PathBuf::from("/tmp/custom_state.json"))
+        );
     }
 }

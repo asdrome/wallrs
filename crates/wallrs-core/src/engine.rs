@@ -18,9 +18,10 @@ use smithay_client_toolkit::{
     },
 };
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use thiserror::Error;
+use wallrs_proto::{OutputSelector, PropertyValue, Response};
 use wayland_client::{
     Connection, Dispatch, Proxy, QueueHandle,
     backend::ObjectId,
@@ -101,6 +102,9 @@ pub struct EngineState {
     pub toplevel_manager: Option<ZwlrForeignToplevelManagerV1>,
     pub toplevels: HashMap<ObjectId, ToplevelData>,
     pub exit: bool,
+    pub state_snapshot: crate::state::StateSnapshot,
+    pub state_path: PathBuf,
+    pub restore_state: bool,
 }
 
 impl CompositorHandler for EngineState {
@@ -198,11 +202,19 @@ impl OutputHandler for EngineState {
         output: wl_output::WlOutput,
     ) {
         let name = self.output_state.info(&output).and_then(|info| info.name);
-        for out in self.outputs.values_mut() {
+        let mut to_restore = None;
+        for (id, out) in self.outputs.iter_mut() {
             if out.wl_output == output {
-                out.name = name;
+                let had_no_name = out.name.is_none();
+                out.name = name.clone();
+                if had_no_name && out.configured && name.is_some() {
+                    to_restore = Some(id.clone());
+                }
                 break;
             }
+        }
+        if let Some(id) = to_restore {
+            self.try_restore_output_state(&id);
         }
     }
 
@@ -248,6 +260,11 @@ impl LayerShellHandler for EngineState {
         _serial: u32,
     ) {
         let surface_id = layer.wl_surface().id();
+        let was_configured = self
+            .outputs
+            .get(&surface_id)
+            .map(|o| o.configured)
+            .unwrap_or(false);
         if let Some(output) = self.outputs.get_mut(&surface_id) {
             let gpu = crate::output::GpuContext {
                 instance: &self.wgpu_instance,
@@ -259,6 +276,17 @@ impl LayerShellHandler for EngineState {
                 output.handle_configure(configure.new_size, &gpu, conn, qh, &*self.renderer_factory)
             {
                 tracing::error!(output = ?output.name, error = ?e, "Failed configuring output surface");
+            }
+        }
+
+        if !was_configured {
+            let is_configured = self
+                .outputs
+                .get(&surface_id)
+                .map(|o| o.configured)
+                .unwrap_or(false);
+            if is_configured {
+                self.try_restore_output_state(&surface_id);
             }
         }
     }
@@ -555,6 +583,172 @@ impl EngineState {
             self.audio_handle = None;
         }
     }
+
+    /// Records an applied wallpaper into persistent state snapshot and saves it to disk.
+    pub fn record_set_wallpaper(&mut self, selector: &OutputSelector, manifest_path: &Path) {
+        let abs_path =
+            std::fs::canonicalize(manifest_path).unwrap_or_else(|_| manifest_path.to_path_buf());
+        let wallpaper_dir = if abs_path.is_file() {
+            abs_path
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or(abs_path)
+        } else {
+            abs_path
+        };
+
+        for out in self.outputs.values() {
+            let matches = match selector {
+                OutputSelector::All => true,
+                OutputSelector::Named(n) => out.name.as_deref() == Some(n.as_str()),
+                OutputSelector::Span(names) => out.name.as_ref().is_some_and(|n| names.contains(n)),
+            };
+            if matches && let Some(name) = &out.name {
+                self.state_snapshot.outputs.insert(
+                    name.clone(),
+                    crate::state::SavedOutputConfig::Wallpaper {
+                        path: wallpaper_dir.clone(),
+                        muted: out.audio_muted,
+                        properties: HashMap::new(),
+                    },
+                );
+            }
+        }
+        let _ = crate::state::save_state(&self.state_path, &self.state_snapshot);
+    }
+
+    /// Records property changes into persistent state and saves to disk.
+    pub fn record_set_property(
+        &mut self,
+        selector: &OutputSelector,
+        key: &str,
+        value: &PropertyValue,
+    ) {
+        for out in self.outputs.values() {
+            let matches = match selector {
+                OutputSelector::All => true,
+                OutputSelector::Named(n) => out.name.as_deref() == Some(n.as_str()),
+                OutputSelector::Span(names) => out.name.as_ref().is_some_and(|n| names.contains(n)),
+            };
+            if matches && let Some(name) = &out.name {
+                if key == "color" {
+                    if let PropertyValue::Color(c) = value {
+                        self.state_snapshot.outputs.insert(
+                            name.clone(),
+                            crate::state::SavedOutputConfig::Color { color: *c },
+                        );
+                    }
+                } else if key == "mute" {
+                    if let PropertyValue::Bool(m) = value
+                        && let Some(crate::state::SavedOutputConfig::Wallpaper { muted, .. }) =
+                            self.state_snapshot.outputs.get_mut(name)
+                    {
+                        *muted = *m;
+                    }
+                } else if let Some(crate::state::SavedOutputConfig::Wallpaper {
+                    properties, ..
+                }) = self.state_snapshot.outputs.get_mut(name)
+                {
+                    properties.insert(key.to_string(), value.clone());
+                }
+            }
+        }
+        let _ = crate::state::save_state(&self.state_path, &self.state_snapshot);
+    }
+
+    /// Records a mute toggle change into persistent state and saves to disk.
+    pub fn record_mute_change(&mut self, selector: &OutputSelector, new_muted: bool) {
+        for out in self.outputs.values() {
+            let matches = match selector {
+                OutputSelector::All => true,
+                OutputSelector::Named(n) => out.name.as_deref() == Some(n.as_str()),
+                OutputSelector::Span(names) => out.name.as_ref().is_some_and(|n| names.contains(n)),
+            };
+            if matches
+                && let Some(name) = &out.name
+                && let Some(crate::state::SavedOutputConfig::Wallpaper { muted, .. }) =
+                    self.state_snapshot.outputs.get_mut(name)
+            {
+                *muted = new_muted;
+            }
+        }
+        let _ = crate::state::save_state(&self.state_path, &self.state_snapshot);
+    }
+
+    /// Attempts to restore a saved wallpaper or color state to an output after it has been configured.
+    pub fn try_restore_output_state(&mut self, surface_id: &ObjectId) {
+        if !self.restore_state {
+            return;
+        }
+        let output_name = match self.outputs.get(surface_id).and_then(|o| o.name.clone()) {
+            Some(n) => n,
+            None => return,
+        };
+
+        let saved = match self.state_snapshot.outputs.get(&output_name) {
+            Some(s) => s.clone(),
+            None => return,
+        };
+
+        match saved {
+            crate::state::SavedOutputConfig::Wallpaper {
+                path,
+                muted,
+                properties,
+            } => {
+                let manifest_path = if path.is_dir() {
+                    path.join("wallpaper.toml")
+                } else {
+                    path.clone()
+                };
+
+                if !manifest_path.exists() {
+                    tracing::warn!(
+                        output = %output_name,
+                        path = %manifest_path.display(),
+                        "Saved wallpaper path does not exist; keeping default background"
+                    );
+                    return;
+                }
+
+                tracing::info!(
+                    output = %output_name,
+                    path = %manifest_path.display(),
+                    "Restoring saved wallpaper from session state"
+                );
+
+                let selector = OutputSelector::Named(output_name.clone());
+                let resp = crate::ipc::apply_wallpaper(self, &selector, &manifest_path);
+                if let Response::Ok = resp
+                    && let Some(out) = self.outputs.get_mut(surface_id)
+                {
+                    out.set_muted(muted);
+                    for (k, v) in properties {
+                        let _ = out.set_property(&k, v, &self.qh);
+                    }
+                }
+            }
+            crate::state::SavedOutputConfig::Color { color } => {
+                tracing::info!(
+                    output = %output_name,
+                    color = ?color,
+                    "Restoring saved background color from session state"
+                );
+                if let Some(out) = self.outputs.get_mut(surface_id) {
+                    let gpu = crate::output::GpuContext {
+                        instance: &self.wgpu_instance,
+                        adapter: &self.wgpu_adapter,
+                        device: &self.wgpu_device,
+                        queue: &self.wgpu_queue,
+                    };
+                    let solid = Box::new(wallrs_render::SolidColorRenderer::new(color));
+                    let _ = out.set_renderer(solid, &gpu, &self.qh);
+                    out.audio_track = None;
+                    out.audio_handle = None;
+                }
+            }
+        }
+    }
 }
 
 /// Main engine runner orchestrating Wayland, Calloop, WGPU, and IPC socket server.
@@ -603,6 +797,15 @@ impl Engine {
         let fullscreen_pause = config.fullscreen_pause;
         let pause_on_maximized = config.pause_on_maximized;
         let allow_audio = config.allow_audio;
+        let state_path = config
+            .state_path
+            .unwrap_or_else(crate::state::default_state_path);
+        let restore_state = config.restore_state;
+        let state_snapshot = if restore_state {
+            crate::state::load_state(&state_path).unwrap_or_default()
+        } else {
+            crate::state::StateSnapshot::default()
+        };
 
         tracing::info!("Connecting to Wayland display");
         let conn = Connection::connect_to_env()
@@ -722,6 +925,9 @@ impl Engine {
             toplevel_manager,
             toplevels: HashMap::new(),
             exit: false,
+            state_snapshot,
+            state_path,
+            restore_state,
         };
 
         Ok(Self {
