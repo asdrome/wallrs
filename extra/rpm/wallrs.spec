@@ -11,6 +11,7 @@ Source0:        %{url}/archive/v%{version}/%{name}-%{version}.tar.gz
 BuildRequires:  cargo
 BuildRequires:  rust >= 1.85.0
 BuildRequires:  clang
+BuildRequires:  clang-devel
 BuildRequires:  pkgconf
 BuildRequires:  pipewire-devel
 BuildRequires:  mpv-devel
@@ -19,10 +20,11 @@ BuildRequires:  vulkan-loader-devel
 BuildRequires:  systemd-rpm-macros
 
 # Runtime dependencies (required for end-user execution)
+# Note: Dynamic shared library dependencies (libpipewire, libmpv) are
+# automatically detected and added by RPM's find-requires script.
 Requires:       vulkan-loader
 Requires:       pipewire-libs
 Requires:       mpv-libs
-Requires:       wayland-client
 
 %description
 A high-performance, Wayland-native live wallpaper daemon (wallrsd) and CLI

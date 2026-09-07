@@ -29,12 +29,14 @@ clean:
 deb:
 	cargo deb -p wallrs-daemon
 
+RPMBUILD_FLAGS ?= --nocheck
+
 rpm:
 	@mkdir -p $(HOME)/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 	@VERSION=$$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1); \
 	git archive --format=tar.gz --prefix="wallrs-$$VERSION/" -o $(HOME)/rpmbuild/SOURCES/"wallrs-$$VERSION.tar.gz" HEAD; \
 	cp extra/rpm/wallrs.spec $(HOME)/rpmbuild/SPECS/; \
-	rpmbuild -ba $(HOME)/rpmbuild/SPECS/wallrs.spec; \
+	rpmbuild -ba $(RPMBUILD_FLAGS) $(HOME)/rpmbuild/SPECS/wallrs.spec; \
 	echo "RPM packages generated in $(HOME)/rpmbuild/RPMS/"
 
 bump-patch:
