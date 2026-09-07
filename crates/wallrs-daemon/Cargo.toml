@@ -51,6 +51,41 @@ assets = [
         "644",
     ],
     [
+        "../../extra/systemd/wallrs-theme-sync.path",
+        "usr/lib/systemd/user/wallrs-theme-sync.path",
+        "644",
+    ],
+    [
+        "../../extra/systemd/wallrs-theme-sync.service",
+        "usr/lib/systemd/user/wallrs-theme-sync.service",
+        "644",
+    ],
+    [
+        "../../contrib/wallrs-theme-sync.sh",
+        "usr/share/wallrs/contrib/wallrs-theme-sync.sh",
+        "755",
+    ],
+    [
+        "../../contrib/kde-accent-color.sh",
+        "usr/share/wallrs/contrib/kde-accent-color.sh",
+        "755",
+    ],
+    [
+        "../../contrib/hyprland-matugen.sh",
+        "usr/share/wallrs/contrib/hyprland-matugen.sh",
+        "755",
+    ],
+    [
+        "../../contrib/kde-auto-pause.sh",
+        "usr/share/wallrs/contrib/kde-auto-pause.sh",
+        "755",
+    ],
+    [
+        "../../contrib/hyprland-auto-pause.sh",
+        "usr/share/wallrs/contrib/hyprland-auto-pause.sh",
+        "755",
+    ],
+    [
         "../../extra/metainfo/com.asdrome.wallrs.metainfo.xml",
         "usr/share/metainfo/com.asdrome.wallrs.metainfo.xml",
         "644",

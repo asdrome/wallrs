@@ -57,12 +57,18 @@ changelog:
 		echo "CHANGELOG.md generated from git log"; \
 	fi
 
+SHAREDIR ?= $(PREFIX)/share/wallrs
+
 install: build
 	install -d $(DESTDIR)$(BINDIR)
 	install -m 755 target/release/wallrsd $(DESTDIR)$(BINDIR)/wallrsd
 	install -m 755 target/release/wallctl $(DESTDIR)$(BINDIR)/wallctl
 	install -d $(DESTDIR)$(SYSTEMD_USER_DIR)
 	install -m 644 extra/systemd/wallrsd.service $(DESTDIR)$(SYSTEMD_USER_DIR)/wallrsd.service
+	install -m 644 extra/systemd/wallrs-theme-sync.path $(DESTDIR)$(SYSTEMD_USER_DIR)/wallrs-theme-sync.path
+	install -m 644 extra/systemd/wallrs-theme-sync.service $(DESTDIR)$(SYSTEMD_USER_DIR)/wallrs-theme-sync.service
+	install -d $(DESTDIR)$(SHAREDIR)/contrib
+	install -m 755 contrib/*.sh $(DESTDIR)$(SHAREDIR)/contrib/
 	install -d $(DESTDIR)$(DOCDIR)
 	install -m 644 README.md $(DESTDIR)$(DOCDIR)/README.md
 	install -d $(DESTDIR)$(LICDIR)
@@ -73,6 +79,9 @@ uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/wallrsd
 	rm -f $(DESTDIR)$(BINDIR)/wallctl
 	rm -f $(DESTDIR)$(SYSTEMD_USER_DIR)/wallrsd.service
+	rm -f $(DESTDIR)$(SYSTEMD_USER_DIR)/wallrs-theme-sync.path
+	rm -f $(DESTDIR)$(SYSTEMD_USER_DIR)/wallrs-theme-sync.service
+	rm -rf $(DESTDIR)$(SHAREDIR)
 	rm -rf $(DESTDIR)$(DOCDIR)
 	rm -rf $(DESTDIR)$(LICDIR)
 

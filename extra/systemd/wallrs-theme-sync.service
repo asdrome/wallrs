@@ -1,0 +1,12 @@
+[Unit]
+Description=Synchronize desktop theme and accent color from active wallrs wallpaper
+Documentation=https://github.com/asdrome/wallrs
+PartOf=wallrsd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/share/wallrs/contrib/wallrs-theme-sync.sh
+TimeoutSec=15
+StandardOutput=journal
+StandardError=journal
+
