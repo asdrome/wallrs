@@ -10,6 +10,7 @@ Source0:        %{url}/archive/v%{version}/%{name}-%{version}.tar.gz
 # Build dependencies (required only during RPM compilation)
 BuildRequires:  cargo
 BuildRequires:  rust >= 1.85.0
+BuildRequires:  clang
 BuildRequires:  pkgconf
 BuildRequires:  pipewire-devel
 BuildRequires:  mpv-devel
