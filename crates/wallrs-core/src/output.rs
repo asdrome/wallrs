@@ -45,6 +45,7 @@ pub struct OutputSurface {
     pub cursor_position: Option<(f32, f32)>,
     pub audio_handle: Option<wallrs_audio::SpectrumHandle>,
     pub audio_track: Option<wallrs_audio::BackgroundAudioPlayer>,
+    pub audio_muted: bool,
 }
 
 /// Bundles WGPU rendering context references passed to output configuration.
@@ -81,6 +82,7 @@ impl OutputSurface {
             cursor_position: None,
             audio_handle: None,
             audio_track: None,
+            audio_muted: true,
         }
     }
 
@@ -335,6 +337,30 @@ impl OutputSurface {
         value: wallrs_proto::PropertyValue,
         qh: &QueueHandle<EngineState>,
     ) -> Result<(), OutputError> {
+        if key == "mute"
+            && let wallrs_proto::PropertyValue::Bool(b) = value
+        {
+            self.set_muted(b);
+            return Ok(());
+        }
+
+        if key == "volume" {
+            let mut handled = false;
+            if let Some(renderer) = &mut self.renderer
+                && renderer.set_property(key, value.clone()).is_ok()
+            {
+                handled = true;
+            }
+            if let Some(player) = &mut self.audio_track
+                && player.set_property(key, value.clone()).is_ok()
+            {
+                handled = true;
+            }
+            if handled {
+                return Ok(());
+            }
+        }
+
         if let Some(renderer) = &mut self.renderer {
             renderer
                 .set_property(key, value.clone())
@@ -351,6 +377,24 @@ impl OutputSurface {
             self.layer_surface.commit();
         }
         Ok(())
+    }
+
+    /// Sets the muted state for this output's renderer and background audio track.
+    pub fn set_muted(&mut self, muted: bool) {
+        self.audio_muted = muted;
+        if let Some(renderer) = &mut self.renderer {
+            let _ = renderer.set_property("mute", wallrs_proto::PropertyValue::Bool(muted));
+        }
+        if let Some(player) = &mut self.audio_track {
+            let _ = player.set_property("mute", wallrs_proto::PropertyValue::Bool(muted));
+        }
+    }
+
+    /// Toggles the muted state of this output and returns the new state.
+    pub fn toggle_mute(&mut self) -> bool {
+        let new_state = !self.audio_muted;
+        self.set_muted(new_state);
+        new_state
     }
 
     /// Sets the manual paused state of this output (e.g., from `wallctl pause`).

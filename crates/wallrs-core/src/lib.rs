@@ -15,6 +15,7 @@ pub struct EngineConfig {
     pub max_fps: Option<u32>,
     pub fullscreen_pause: bool,
     pub pause_on_maximized: bool,
+    pub allow_audio: bool,
 }
 
 impl Default for EngineConfig {
@@ -24,6 +25,7 @@ impl Default for EngineConfig {
             max_fps: None,
             fullscreen_pause: true,
             pause_on_maximized: true,
+            allow_audio: false,
         }
     }
 }

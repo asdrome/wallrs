@@ -26,6 +26,10 @@ struct Args {
     #[arg(long)]
     no_pause_on_maximized: bool,
 
+    /// Allow audio playback from wallpapers by default (default: false, audio is muted)
+    #[arg(long)]
+    allow_audio: bool,
+
     /// Legacy flag retained for backward compatibility (pause on maximized is now default)
     #[arg(long, hide = true)]
     pause_on_maximized: bool,
@@ -108,6 +112,7 @@ fn main() {
         max_fps: args.fps,
         fullscreen_pause: !args.no_fullscreen_pause,
         pause_on_maximized,
+        allow_audio: args.allow_audio,
     };
 
     let mut engine = match Engine::with_config(

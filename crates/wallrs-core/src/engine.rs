@@ -97,6 +97,7 @@ pub struct EngineState {
     pub max_fps: Option<u32>,
     pub fullscreen_pause: bool,
     pub pause_on_maximized: bool,
+    pub allow_audio: bool,
     pub toplevel_manager: Option<ZwlrForeignToplevelManagerV1>,
     pub toplevels: HashMap<ObjectId, ToplevelData>,
     pub exit: bool,
@@ -601,6 +602,7 @@ impl Engine {
         let max_fps = config.max_fps;
         let fullscreen_pause = config.fullscreen_pause;
         let pause_on_maximized = config.pause_on_maximized;
+        let allow_audio = config.allow_audio;
 
         tracing::info!("Connecting to Wayland display");
         let conn = Connection::connect_to_env()
@@ -716,6 +718,7 @@ impl Engine {
             max_fps,
             fullscreen_pause,
             pause_on_maximized,
+            allow_audio,
             toplevel_manager,
             toplevels: HashMap::new(),
             exit: false,

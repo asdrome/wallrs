@@ -46,6 +46,15 @@ enum Subcommands {
     #[command(alias = "toggle")]
     TogglePause(TargetOutputArgs),
 
+    /// Mute wallpaper audio playback
+    Mute(TargetOutputArgs),
+
+    /// Unmute wallpaper audio playback
+    Unmute(TargetOutputArgs),
+
+    /// Toggle wallpaper audio mute state
+    ToggleMute(TargetOutputArgs),
+
     /// Load and display a wallpaper from a manifest folder or wallpaper.toml
     SetWallpaper(SetWallpaperArgs),
 
@@ -82,6 +91,10 @@ struct SetWallpaperArgs {
     /// Target output name (e.g. "eDP-1"). If omitted, applies to all outputs.
     #[arg(short, long)]
     output: Option<String>,
+
+    /// Unmute wallpaper audio playback upon loading (audio defaults to muted)
+    #[arg(long)]
+    unmute: bool,
 }
 
 #[derive(Args, Debug)]
@@ -191,12 +204,16 @@ fn print_outputs_table(outputs: &[OutputInfoProto]) {
         return;
     }
 
-    println!("{:<15} {:<15} {:<10}", "OUTPUT", "RESOLUTION", "STATUS");
-    println!("{:-<15} {:-<15} {:-<10}", "", "", "");
+    println!(
+        "{:<15} {:<15} {:<10} {:<10}",
+        "OUTPUT", "RESOLUTION", "STATUS", "AUDIO"
+    );
+    println!("{:-<15} {:-<15} {:-<10} {:-<10}", "", "", "", "");
     for out in outputs {
         let res = format!("{}x{}", out.width, out.height);
         let status = if out.paused { "Paused" } else { "Active" };
-        println!("{:<15} {:<15} {:<10}", out.name, res, status);
+        let audio = if out.muted { "Muted" } else { "Unmuted" };
+        println!("{:<15} {:<15} {:<10} {:<10}", out.name, res, status, audio);
     }
 }
 
@@ -428,6 +445,9 @@ fn run() -> Result<(), String> {
     }
     let socket_path = cli.socket.unwrap_or_else(default_socket_path);
 
+    let mut unmute_after = false;
+    let mut unmute_selector = OutputSelector::All;
+
     let (cmd, expect_json) = match cli.command {
         Subcommands::ListOutputs(args) => (Command::ListOutputs, args.json),
         Subcommands::SetColor(args) => {
@@ -478,6 +498,40 @@ fn run() -> Result<(), String> {
             },
             false,
         ),
+        Subcommands::Mute(args) => {
+            let selector = match args.output {
+                Some(name) => OutputSelector::Named(name),
+                None => OutputSelector::All,
+            };
+            (
+                Command::SetProperty {
+                    output: selector,
+                    key: "mute".into(),
+                    value: PropertyValue::Bool(true),
+                },
+                false,
+            )
+        }
+        Subcommands::Unmute(args) => {
+            let selector = match args.output {
+                Some(name) => OutputSelector::Named(name),
+                None => OutputSelector::All,
+            };
+            (
+                Command::SetProperty {
+                    output: selector,
+                    key: "mute".into(),
+                    value: PropertyValue::Bool(false),
+                },
+                false,
+            )
+        }
+        Subcommands::ToggleMute(args) => (
+            Command::ToggleMute {
+                output: args.output,
+            },
+            false,
+        ),
         Subcommands::SetWallpaper(args) => {
             let manifest_path = if args.path.is_dir() {
                 args.path.join("wallpaper.toml")
@@ -491,6 +545,10 @@ fn run() -> Result<(), String> {
                 Some(name) => OutputSelector::Named(name),
                 None => OutputSelector::All,
             };
+            if args.unmute {
+                unmute_after = true;
+                unmute_selector = selector.clone();
+            }
             (
                 Command::SetWallpaper {
                     output: selector,
@@ -514,6 +572,17 @@ fn run() -> Result<(), String> {
 
     match resp {
         Response::Ok => {
+            if unmute_after {
+                let unmute_cmd = Command::SetProperty {
+                    output: unmute_selector,
+                    key: "mute".into(),
+                    value: PropertyValue::Bool(false),
+                };
+                let resp2 = send_command(&socket_path, &unmute_cmd)?;
+                if let Response::Error(err) = resp2 {
+                    return Err(format!("Wallpaper loaded, but failed to unmute: {err}"));
+                }
+            }
             println!("OK");
             Ok(())
         }
@@ -650,5 +719,52 @@ mod tests {
 
         let non_existent = workspace_root.join("examples/non_existent_wallpaper_123");
         assert!(validate_wallpaper(&non_existent).is_err());
+    }
+
+    #[test]
+    fn test_cli_parse_mute_commands() {
+        let cli_mute = Cli::try_parse_from(["wallctl", "mute", "--output", "HDMI-A-1"]).unwrap();
+        match cli_mute.command {
+            Subcommands::Mute(args) => {
+                assert_eq!(args.output, Some("HDMI-A-1".into()));
+            }
+            _ => panic!("Expected Subcommands::Mute"),
+        }
+
+        let cli_unmute = Cli::try_parse_from(["wallctl", "unmute"]).unwrap();
+        match cli_unmute.command {
+            Subcommands::Unmute(args) => {
+                assert_eq!(args.output, None);
+            }
+            _ => panic!("Expected Subcommands::Unmute"),
+        }
+
+        let cli_toggle_mute =
+            Cli::try_parse_from(["wallctl", "toggle-mute", "-o", "eDP-1"]).unwrap();
+        match cli_toggle_mute.command {
+            Subcommands::ToggleMute(args) => {
+                assert_eq!(args.output, Some("eDP-1".into()));
+            }
+            _ => panic!("Expected Subcommands::ToggleMute"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_set_wallpaper_unmute() {
+        let cli = Cli::try_parse_from([
+            "wallctl",
+            "set-wallpaper",
+            "examples/video-sunset",
+            "--unmute",
+        ])
+        .unwrap();
+        match cli.command {
+            Subcommands::SetWallpaper(args) => {
+                assert!(args.unmute);
+                assert_eq!(args.output, None);
+                assert_eq!(args.path, PathBuf::from("examples/video-sunset"));
+            }
+            _ => panic!("Expected Subcommands::SetWallpaper"),
+        }
     }
 }

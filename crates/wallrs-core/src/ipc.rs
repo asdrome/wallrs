@@ -113,6 +113,7 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                     width: out.width,
                     height: out.height,
                     paused: out.is_paused(),
+                    muted: out.audio_muted,
                 })
                 .collect();
             Response::Outputs(list)
@@ -238,6 +239,37 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
             }
         },
 
+        Command::ToggleMute { output } => match output {
+            Some(name) => {
+                let mut matched = false;
+                for out in state.outputs.values_mut() {
+                    if out.name.as_deref() == Some(name.as_str()) {
+                        matched = true;
+                        let new_muted = out.toggle_mute();
+                        tracing::info!(output = %name, muted = new_muted, "Toggled output mute state");
+                        break;
+                    }
+                }
+                if !matched {
+                    Response::Error(format!("No matching output found for '{name}'"))
+                } else {
+                    Response::Ok
+                }
+            }
+            None => {
+                if state.outputs.is_empty() {
+                    Response::Ok
+                } else {
+                    let any_unmuted = state.outputs.values().any(|o| !o.audio_muted);
+                    let target_muted = any_unmuted;
+                    for out in state.outputs.values_mut() {
+                        out.set_muted(target_muted);
+                    }
+                    Response::Ok
+                }
+            }
+        },
+
         Command::Kill => {
             tracing::info!("Received Kill command via IPC socket. Shutting down daemon.");
             state.exit = true;
@@ -307,6 +339,15 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                                     Ok(mut player) => {
                                         if out.is_paused() {
                                             player.set_paused(true);
+                                        }
+                                        if !state.allow_audio {
+                                            let _ = player.set_property(
+                                                "mute",
+                                                wallrs_proto::PropertyValue::Bool(true),
+                                            );
+                                            out.audio_muted = true;
+                                        } else {
+                                            out.audio_muted = false;
                                         }
                                         out.audio_track = Some(player);
                                     }
@@ -383,6 +424,15 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                                         if out.is_paused() {
                                             player.set_paused(true);
                                         }
+                                        if !state.allow_audio {
+                                            let _ = player.set_property(
+                                                "mute",
+                                                wallrs_proto::PropertyValue::Bool(true),
+                                            );
+                                            out.audio_muted = true;
+                                        } else {
+                                            out.audio_muted = false;
+                                        }
                                         out.audio_track = Some(player);
                                     }
                                     Err(e) => {
@@ -443,6 +493,17 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                             if let Err(e) = out.set_renderer(renderer, &gpu, &state.qh) {
                                 error = Some(e.to_string());
                                 break;
+                            }
+                            if !state.allow_audio {
+                                if let Some(r) = &mut out.renderer {
+                                    let _ = r.set_property(
+                                        "mute",
+                                        wallrs_proto::PropertyValue::Bool(true),
+                                    );
+                                }
+                                out.audio_muted = true;
+                            } else {
+                                out.audio_muted = false;
                             }
                             out.audio_track = None;
                             out.audio_handle = None;

@@ -39,6 +39,9 @@ pub enum Command {
     TogglePause {
         output: Option<String>,
     },
+    ToggleMute {
+        output: Option<String>,
+    },
     Screenshot {
         output: String,
         path: PathBuf,
@@ -54,6 +57,8 @@ pub struct OutputInfoProto {
     pub width: u32,
     pub height: u32,
     pub paused: bool,
+    #[serde(default)]
+    pub muted: bool,
 }
 
 /// Responses emitted by `wallrsd` over the control Unix domain socket.
@@ -211,6 +216,13 @@ mod tests {
         let parsed_toggle: Command = serde_json::from_str(&json_toggle).unwrap();
         assert_eq!(cmd_toggle, parsed_toggle);
 
+        let cmd_mute = Command::ToggleMute {
+            output: Some("DP-1".into()),
+        };
+        let json_mute = serde_json::to_string(&cmd_mute).unwrap();
+        let parsed_mute: Command = serde_json::from_str(&json_mute).unwrap();
+        assert_eq!(cmd_mute, parsed_mute);
+
         let cmd_list = Command::ListOutputs;
         let json_list = serde_json::to_string(&cmd_list).unwrap();
         let parsed_list: Command = serde_json::from_str(&json_list).unwrap();
@@ -224,6 +236,7 @@ mod tests {
             width: 1920,
             height: 1080,
             paused: false,
+            muted: false,
         }]);
         let json = serde_json::to_string(&resp).unwrap();
         let parsed: Response = serde_json::from_str(&json).unwrap();
