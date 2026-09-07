@@ -77,9 +77,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Configure safe git directory
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
       - name: Install Fedora build dependencies
         run: |
           dnf install -y \
@@ -94,6 +91,9 @@ jobs:
             rpm-build \
             git \
             tar
+
+      - name: Configure safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Build RPM and SRPM
         run: |
