@@ -5,82 +5,171 @@
 # KDE Plasma 6 deliberately does not implement the zwlr_foreign_toplevel_manager_v1
 # Wayland protocol for privacy/security reasons.
 #
-# This helper script monitors KWin's D-Bus interface (specifically "showingDesktopChanged"
-# and active window changes) to automatically pause wallrs when windows cover the
-# desktop, and resume rendering when the user reveals the desktop (e.g. Meta+D).
+# This helper script injects a lightweight KWin 6 script via KWin's D-Bus Scripting
+# interface to monitor window states (fullscreen, maximized, minimized, and Show Desktop).
+# When a window is maximized or fullscreen on the active desktop, it calls wallctl pause;
+# when windows are floating, minimized, or the desktop is revealed (Meta+D), it calls wallctl resume.
 #
 # Requirements:
-#   - qdbus6 or qdbus (standard in KDE Plasma) or gdbus
-#   - wallctl (in PATH or ~/.cargo/bin)
+#   - qdbus6 or qdbus (bundled with KDE Plasma)
+#   - dbus-monitor
+#   - wallctl (in PATH, ~/.cargo/bin, or target/{debug,release})
 #
 # Usage:
-#   Add to KDE System Settings -> Autostart -> Add Login Script
-#   or run in background: contrib/kde-auto-pause.sh &
+#   ./contrib/kde-auto-pause.sh
+#   Or add to KDE System Settings -> Autostart -> Add Login Script
 #
 
 set -euo pipefail
 
-# Ensure wallctl is discoverable
-if ! command -v wallctl >/dev/null 2>&1; then
-    if [ -x "${HOME}/.cargo/bin/wallctl" ]; then
-        PATH="${HOME}/.cargo/bin:${PATH}"
+# Locate wallctl binary
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WALLCTL_BIN="${WALLCTL_BIN:-}"
+
+if [ -z "${WALLCTL_BIN}" ]; then
+    if command -v wallctl >/dev/null 2>&1; then
+        WALLCTL_BIN="wallctl"
+    elif [ -x "${HOME}/.cargo/bin/wallctl" ]; then
+        WALLCTL_BIN="${HOME}/.cargo/bin/wallctl"
+    elif [ -x "${SCRIPT_DIR}/../target/release/wallctl" ]; then
+        WALLCTL_BIN="${SCRIPT_DIR}/../target/release/wallctl"
+    elif [ -x "${SCRIPT_DIR}/../target/debug/wallctl" ]; then
+        WALLCTL_BIN="${SCRIPT_DIR}/../target/debug/wallctl"
     else
-        echo "Error: wallctl not found in PATH or ~/.cargo/bin" >&2
+        echo "Error: wallctl not found in PATH, ~/.cargo/bin, or target/{release,debug}" >&2
         exit 1
     fi
 fi
 
-# Detect available qdbus or gdbus binary
+# Detect available qdbus binary
 QDBUS_BIN=""
 if command -v qdbus6 >/dev/null 2>&1; then
     QDBUS_BIN="qdbus6"
 elif command -v qdbus >/dev/null 2>&1; then
     QDBUS_BIN="qdbus"
+else
+    echo "Error: qdbus6 or qdbus is required on KDE Plasma." >&2
+    exit 1
 fi
 
-check_and_update() {
-    local showing_desktop="false"
-    if [ -n "${QDBUS_BIN}" ]; then
-        showing_desktop="$("${QDBUS_BIN}" org.kde.KWin /KWin org.kde.KWin.showingDesktop 2>/dev/null || echo "false")"
-    elif command -v gdbus >/dev/null 2>&1; then
-        showing_desktop="$(gdbus call --session --dest org.kde.KWin --object-path /KWin --method org.freedesktop.DBus.Properties.Get org.kde.KWin showingDesktop 2>/dev/null | grep -o 'true\|false' || echo "false")"
-    fi
+if ! command -v dbus-monitor >/dev/null 2>&1; then
+    echo "Error: dbus-monitor is required." >&2
+    exit 1
+fi
 
-    if [ "${showing_desktop}" = "true" ]; then
-        # Desktop is showing (Meta+D) -> resume wallpaper
-        wallctl resume >/dev/null 2>&1 || true
-    else
-        # Normal state with windows -> pause to conserve GPU/CPU resources
-        # (Customize as desired if you prefer rendering continuously)
-        wallctl pause >/dev/null 2>&1 || true
+KWIN_PLUGIN_NAME="wallrs_kwin_auto_pause"
+TEMP_JS="$(mktemp /tmp/wallrs_kwin_XXXXXX.js)"
+
+cleanup() {
+    trap - EXIT INT TERM
+    echo "[wallrs-kde] Unloading KWin auto-pause script..." >&2
+    "${QDBUS_BIN}" org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript "${KWIN_PLUGIN_NAME}" >/dev/null 2>&1 || true
+    rm -f "${TEMP_JS}"
+    if [ -n "${MONITOR_PID:-}" ]; then
+        kill "${MONITOR_PID}" 2>/dev/null || true
     fi
 }
+trap cleanup EXIT INT TERM
 
-# Run initial state check
-check_and_update
+# Generate KWin ECMAScript
+# Mode 0 = not maximized, 1 = vertical, 2 = horizontal, 3 = fully maximized
+cat << 'EOF' > "${TEMP_JS}"
+function checkState() {
+    var curDesk = workspace.currentDesktop;
+    var wins = workspace.windowList();
+    var shouldPause = false;
 
-# Listen to KWin D-Bus signals
-if command -v gdbus >/dev/null 2>&1; then
-    gdbus monitor --session --dest org.kde.KWin | while read -r line; do
-        case "${line}" in
-            *showingDesktopChanged*|*activeWindowChanged*)
-                check_and_update
-                ;;
-        esac
-    done
-elif command -v dbus-monitor >/dev/null 2>&1; then
-    dbus-monitor "type='signal',sender='org.kde.KWin',interface='org.kde.KWin'" | while read -r line; do
-        case "${line}" in
-            *showingDesktopChanged*|*activeWindowChanged*)
-                check_and_update
-                ;;
-        esac
-    done
-else
-    echo "Warning: Neither gdbus nor dbus-monitor found for signal monitoring. Falling back to polling." >&2
-    while true; do
-        sleep 2
-        check_and_update
-    done
+    for (var i = 0; i < wins.length; i++) {
+        var w = wins[i];
+        if (!w.normalWindow || w.minimized || w.hiddenByShowDesktop) {
+            continue;
+        }
+
+        var onCurrent = w.onAllDesktops;
+        if (!onCurrent && w.desktops) {
+            for (var j = 0; j < w.desktops.length; j++) {
+                if (w.desktops[j] === curDesk) {
+                    onCurrent = true;
+                    break;
+                }
+            }
+        }
+
+        if (!onCurrent) {
+            continue;
+        }
+
+        // Pause if any window on current desktop is fullscreen or maximized (mode 3)
+        if (w.fullScreen || w.maximizeMode === 3) {
+            shouldPause = true;
+            break;
+        }
+    }
+
+    callDBus('org.kde.wallrs', '/wallrs', 'org.kde.wallrs', 'setPause', shouldPause);
+}
+
+function hookWindow(w) {
+    if (!w.normalWindow) return;
+    w.maximizedChanged.connect(checkState);
+    w.fullScreenChanged.connect(checkState);
+    w.minimizedChanged.connect(checkState);
+    w.hiddenByShowDesktopChanged.connect(checkState);
+    w.desktopsChanged.connect(checkState);
+}
+
+workspace.windowAdded.connect(function(w) {
+    hookWindow(w);
+    checkState();
+});
+
+workspace.windowRemoved.connect(checkState);
+workspace.windowActivated.connect(checkState);
+workspace.currentDesktopChanged.connect(checkState);
+
+var initialWins = workspace.windowList();
+for (var k = 0; k < initialWins.length; k++) {
+    hookWindow(initialWins[k]);
+}
+
+checkState();
+EOF
+
+# Ensure any previous instance is unloaded
+"${QDBUS_BIN}" org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript "${KWIN_PLUGIN_NAME}" >/dev/null 2>&1 || true
+
+# Load and start script in KWin
+SCRIPT_ID="$("${QDBUS_BIN}" org.kde.KWin /Scripting org.kde.kwin.Scripting.loadScript "${TEMP_JS}" "${KWIN_PLUGIN_NAME}" 2>/dev/null || echo "")"
+
+if [ -z "${SCRIPT_ID}" ]; then
+    echo "Error: Failed to register script with KWin /Scripting." >&2
+    exit 1
 fi
 
+"${QDBUS_BIN}" org.kde.KWin "/Scripting/Script${SCRIPT_ID}" org.kde.kwin.Script.run >/dev/null 2>&1 || true
+
+echo "[wallrs-kde] Connected to KWin 6 scripting interface."
+echo "[wallrs-kde] Using wallctl binary: ${WALLCTL_BIN}"
+echo "[wallrs-kde] Monitoring window state (Maximized/Fullscreen -> Pause, Floating/Desktop -> Resume)..."
+
+CURRENT_PAUSED=""
+
+# Listen for D-Bus notifications from the KWin script
+dbus-monitor "type='method_call',interface='org.kde.wallrs',member='setPause'" 2>/dev/null | while read -r line; do
+    case "${line}" in
+        *"boolean true"*)
+            if [ "${CURRENT_PAUSED}" != "true" ]; then
+                CURRENT_PAUSED="true"
+                echo "[wallrs-kde] Maximized/Fullscreen window active -> Pausing wallpaper"
+                "${WALLCTL_BIN}" pause >/dev/null 2>&1 || true
+            fi
+            ;;
+        *"boolean false"*)
+            if [ "${CURRENT_PAUSED}" != "false" ]; then
+                CURRENT_PAUSED="false"
+                echo "[wallrs-kde] Desktop visible / Floating windows -> Resuming wallpaper"
+                "${WALLCTL_BIN}" resume >/dev/null 2>&1 || true
+            fi
+            ;;
+    esac
+done

@@ -22,12 +22,25 @@
 
 set -euo pipefail
 
-# Ensure wallctl is discoverable
-if ! command -v wallctl >/dev/null 2>&1; then
-    if [ -x "${HOME}/.cargo/bin/wallctl" ]; then
-        PATH="${HOME}/.cargo/bin:${PATH}"
+# Locate wallctl binary:
+# 1. Custom $WALLCTL_BIN environment variable
+# 2. System PATH
+# 3. ~/.cargo/bin/wallctl
+# 4. Local workspace target/{release,debug}/wallctl
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WALLCTL_BIN="${WALLCTL_BIN:-}"
+
+if [ -z "${WALLCTL_BIN}" ]; then
+    if command -v wallctl >/dev/null 2>&1; then
+        WALLCTL_BIN="wallctl"
+    elif [ -x "${HOME}/.cargo/bin/wallctl" ]; then
+        WALLCTL_BIN="${HOME}/.cargo/bin/wallctl"
+    elif [ -x "${SCRIPT_DIR}/../target/release/wallctl" ]; then
+        WALLCTL_BIN="${SCRIPT_DIR}/../target/release/wallctl"
+    elif [ -x "${SCRIPT_DIR}/../target/debug/wallctl" ]; then
+        WALLCTL_BIN="${SCRIPT_DIR}/../target/debug/wallctl"
     else
-        echo "Error: wallctl not found in PATH or ~/.cargo/bin" >&2
+        echo "Error: wallctl not found in PATH, ~/.cargo/bin, or target/{release,debug}" >&2
         exit 1
     fi
 fi
@@ -59,15 +72,15 @@ check_and_update() {
 
     if [ "${PAUSE_ON_ANY_WINDOW}" = "1" ]; then
         if [ "${window_count}" -gt 0 ]; then
-            wallctl pause >/dev/null 2>&1 || true
+            "${WALLCTL_BIN}" pause >/dev/null 2>&1 || true
         else
-            wallctl resume >/dev/null 2>&1 || true
+            "${WALLCTL_BIN}" resume >/dev/null 2>&1 || true
         fi
     else
         if [ "${has_fullscreen}" = "true" ]; then
-            wallctl pause >/dev/null 2>&1 || true
+            "${WALLCTL_BIN}" pause >/dev/null 2>&1 || true
         else
-            wallctl resume >/dev/null 2>&1 || true
+            "${WALLCTL_BIN}" resume >/dev/null 2>&1 || true
         fi
     fi
 }
@@ -79,7 +92,7 @@ check_and_update
 if command -v socat >/dev/null 2>&1; then
     socat -u "UNIX-CONNECT:${SOCKET_PATH}" - | while read -r event; do
         case "${event}" in
-            workspace>>*|activewindow>>*|openwindow>>*|closewindow>>*|fullscreen>>*|changefloatingmode>>*)
+            "workspace>>"*|"activewindow>>"*|"openwindow>>"*|"closewindow>>"*|"fullscreen>>"*|"changefloatingmode>>"*)
                 check_and_update
                 ;;
         esac
@@ -87,7 +100,7 @@ if command -v socat >/dev/null 2>&1; then
 elif command -v nc >/dev/null 2>&1; then
     nc -U "${SOCKET_PATH}" | while read -r event; do
         case "${event}" in
-            workspace>>*|activewindow>>*|openwindow>>*|closewindow>>*|fullscreen>>*|changefloatingmode>>*)
+            "workspace>>"*|"activewindow>>"*|"openwindow>>"*|"closewindow>>"*|"fullscreen>>"*|"changefloatingmode>>"*)
                 check_and_update
                 ;;
         esac
