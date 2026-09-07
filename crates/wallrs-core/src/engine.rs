@@ -93,6 +93,7 @@ pub struct EngineState {
     pub outputs: HashMap<ObjectId, OutputSurface>,
     pub renderer_factory: Arc<dyn Fn() -> Box<dyn WallpaperRenderer>>,
     pub audio_handle: Option<wallrs_audio::SpectrumHandle>,
+    pub audio_capture: Option<wallrs_audio::AudioCapture>,
     pub max_fps: Option<u32>,
     pub fullscreen_pause: bool,
     pub pause_on_maximized: bool,
@@ -170,7 +171,7 @@ impl OutputHandler for EngineState {
             qh,
             surface,
             Layer::Background,
-            Some("wallrs"),
+            Some("desktop"),
             Some(&output),
         );
 
@@ -222,6 +223,7 @@ impl OutputHandler for EngineState {
             if let Some(mut out) = self.outputs.remove(&id) {
                 out.teardown();
             }
+            self.maybe_stop_audio_capture();
         }
     }
 }
@@ -232,6 +234,7 @@ impl LayerShellHandler for EngineState {
         if let Some(mut out) = self.outputs.remove(&surface_id) {
             tracing::info!(output = ?out.name, "Layer surface closed by compositor");
             out.teardown();
+            self.maybe_stop_audio_capture();
         }
     }
 
@@ -515,6 +518,42 @@ impl EngineState {
             out.set_fullscreen_paused(should_pause, &self.qh);
         }
     }
+
+    /// Ensures PipeWire audio capture is running, starting it on demand if necessary.
+    pub fn ensure_audio_capture(&mut self) -> Option<wallrs_audio::SpectrumHandle> {
+        if let Some(handle) = &self.audio_handle {
+            return Some(handle.clone());
+        }
+
+        match wallrs_audio::AudioCapture::start(32) {
+            Ok(capture) => {
+                let handle = capture.spectrum_handle();
+                self.audio_handle = Some(handle.clone());
+                self.audio_capture = Some(capture);
+                tracing::info!("PipeWire audio capture started on demand (32 frequency bands)");
+                Some(handle)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = ?e,
+                    "PipeWire audio capture unavailable; running in silent mode"
+                );
+                None
+            }
+        }
+    }
+
+    /// Stops PipeWire audio capture if no outputs currently have an active audio handle.
+    pub fn maybe_stop_audio_capture(&mut self) {
+        let any_audio = self.outputs.values().any(|out| out.audio_handle.is_some());
+        if !any_audio && self.audio_capture.is_some() {
+            tracing::info!("No active audio-reactive outputs; stopping PipeWire audio capture");
+            if let Some(mut capture) = self.audio_capture.take() {
+                capture.stop();
+            }
+            self.audio_handle = None;
+        }
+    }
 }
 
 /// Main engine runner orchestrating Wayland, Calloop, WGPU, and IPC socket server.
@@ -658,21 +697,6 @@ impl Engine {
         let ipc_listener = ipc::bind_socket(&socket_path)?;
         ipc::register_ipc_source(event_loop.handle(), ipc_listener)?;
 
-        // Initialize PipeWire audio capture (falls back gracefully to silent mode if unavailable)
-        let audio_handle = match wallrs_audio::spawn_capture(32) {
-            Ok((handle, _thread)) => {
-                tracing::info!("PipeWire audio capture initialized (32 frequency bands)");
-                Some(handle)
-            }
-            Err(e) => {
-                tracing::warn!(
-                    error = ?e,
-                    "PipeWire audio capture unavailable; running in silent mode"
-                );
-                None
-            }
-        };
-
         let state = EngineState {
             qh,
             registry_state,
@@ -687,7 +711,8 @@ impl Engine {
             wgpu_queue,
             outputs: HashMap::new(),
             renderer_factory: Arc::new(renderer_factory),
-            audio_handle,
+            audio_handle: None,
+            audio_capture: None,
             max_fps,
             fullscreen_pause,
             pause_on_maximized,

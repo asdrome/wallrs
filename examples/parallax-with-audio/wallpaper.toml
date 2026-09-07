@@ -14,5 +14,5 @@ pan = { speed = 0.005, axis = "x" }
 
 [audio]
 path = "ambient.ogg"
-volume = 30.0
+volume = 60.0
 loop = true

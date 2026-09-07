@@ -225,6 +225,7 @@ struct StreamUserData {
 
 fn run_audio_capture_loop(
     init_tx: mpsc::Sender<Result<(), AudioError>>,
+    stop_rx: pipewire::channel::Receiver<()>,
     spectrum_handle: SpectrumHandle,
     bands: usize,
 ) {
@@ -239,6 +240,11 @@ fn run_audio_capture_loop(
             return;
         }
     };
+
+    let _receiver = stop_rx.attach(mainloop.loop_(), {
+        let mainloop = mainloop.clone();
+        move |_| mainloop.quit()
+    });
 
     let context = match pw::context::ContextRc::new(&mainloop, None) {
         Ok(c) => c,
@@ -276,6 +282,12 @@ fn run_audio_capture_loop(
         *pw::keys::MEDIA_CATEGORY => "Capture",
         *pw::keys::MEDIA_ROLE => "Music",
         *pw::keys::STREAM_CAPTURE_SINK => "true",
+        *pw::keys::NODE_NAME => "wallrs-audio-capture",
+        *pw::keys::NODE_DESCRIPTION => "wallrs Audio Visualizer (Sink Monitor)",
+        *pw::keys::APP_NAME => "wallrs",
+        *pw::keys::APP_ID => "org.wallrs.wallrs",
+        *pw::keys::NODE_PASSIVE => "true",
+        *pw::keys::NODE_VIRTUAL => "true",
         "target.object" => "@DEFAULT_AUDIO_SINK@",
     };
 
@@ -430,30 +442,72 @@ fn run_audio_capture_loop(
     mainloop.run();
 }
 
-/// Spawns the background PipeWire audio capture and FFT analysis thread.
-pub fn spawn_capture(bands: usize) -> Result<(SpectrumHandle, JoinHandle<()>), AudioError> {
-    let handle = SpectrumHandle::new(bands);
-    let handle_clone = handle.clone();
-    let (tx, rx) = mpsc::channel();
+/// Manages the background PipeWire audio capture and analysis thread lifecycle.
+pub struct AudioCapture {
+    handle: SpectrumHandle,
+    stop_tx: Option<pipewire::channel::Sender<()>>,
+    thread: Option<JoinHandle<()>>,
+}
 
-    let thread = std::thread::Builder::new()
-        .name("wallrs-audio".into())
-        .spawn(move || {
-            run_audio_capture_loop(tx, handle_clone, bands);
-        })
-        .map_err(|e| AudioError::PipeWireUnavailable(e.to_string()))?;
+impl AudioCapture {
+    /// Spawns the background PipeWire audio capture and FFT analysis thread.
+    pub fn start(bands: usize) -> Result<Self, AudioError> {
+        let handle = SpectrumHandle::new(bands);
+        let handle_clone = handle.clone();
+        let (init_tx, init_rx) = mpsc::channel();
+        let (stop_tx, stop_rx) = pipewire::channel::channel::<()>();
 
-    // Wait for stream to connect or fail with a 1.5 second timeout
-    match rx.recv_timeout(Duration::from_millis(1500)) {
-        Ok(Ok(())) => Ok((handle, thread)),
-        Ok(Err(e)) => Err(e),
-        Err(mpsc::RecvTimeoutError::Timeout) => Err(AudioError::Timeout(
-            "PipeWire connection initialization timed out".into(),
-        )),
-        Err(mpsc::RecvTimeoutError::Disconnected) => Err(AudioError::PipeWireUnavailable(
-            "Audio thread terminated unexpectedly".into(),
-        )),
+        let thread = std::thread::Builder::new()
+            .name("wallrs-audio".into())
+            .spawn(move || {
+                run_audio_capture_loop(init_tx, stop_rx, handle_clone, bands);
+            })
+            .map_err(|e| AudioError::PipeWireUnavailable(e.to_string()))?;
+
+        // Wait for stream to connect or fail with a 1.5 second timeout
+        match init_rx.recv_timeout(Duration::from_millis(1500)) {
+            Ok(Ok(())) => Ok(Self {
+                handle,
+                stop_tx: Some(stop_tx),
+                thread: Some(thread),
+            }),
+            Ok(Err(e)) => Err(e),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(AudioError::Timeout(
+                "PipeWire connection initialization timed out".into(),
+            )),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(AudioError::PipeWireUnavailable(
+                "Audio thread terminated unexpectedly".into(),
+            )),
+        }
     }
+
+    /// Returns a cloneable lock-free spectrum handle.
+    pub fn spectrum_handle(&self) -> SpectrumHandle {
+        self.handle.clone()
+    }
+
+    /// Stops the PipeWire capture thread cleanly.
+    pub fn stop(&mut self) {
+        if let Some(stop_tx) = self.stop_tx.take() {
+            let _ = stop_tx.send(());
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Drop for AudioCapture {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+/// Spawns the background PipeWire audio capture and FFT analysis thread.
+pub fn spawn_capture(bands: usize) -> Result<(SpectrumHandle, AudioCapture), AudioError> {
+    let capture = AudioCapture::start(bands)?;
+    let handle = capture.spectrum_handle();
+    Ok((handle, capture))
 }
 
 #[cfg(test)]
@@ -561,5 +615,15 @@ mod tests {
 
         let empty = AudioMetrics::from_spectrum(&[]);
         assert_eq!(empty, AudioMetrics::default());
+    }
+
+    #[test]
+    fn test_audio_capture_lifecycle() {
+        if let Ok(mut capture) = AudioCapture::start(32) {
+            let handle = capture.spectrum_handle();
+            let data = handle.latest();
+            assert_eq!(data.len(), 32);
+            capture.stop();
+        }
     }
 }

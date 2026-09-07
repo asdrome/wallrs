@@ -411,6 +411,7 @@ impl OutputSurface {
             renderer.teardown();
         }
         self.audio_track = None;
+        self.audio_handle = None;
         self.wgpu_surface = None;
         self.surface_config = None;
     }

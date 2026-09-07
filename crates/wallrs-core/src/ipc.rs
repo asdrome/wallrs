@@ -147,6 +147,8 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                             error = Some(e.to_string());
                             break;
                         }
+                        out.audio_track = None;
+                        out.audio_handle = None;
                         continue;
                     }
 
@@ -156,6 +158,7 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                     }
                 }
             }
+            state.maybe_stop_audio_capture();
 
             if !matched {
                 Response::Error(format!("No matching output found for selector {output:?}"))
@@ -295,6 +298,7 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                                 error = Some(e.to_string());
                                 break;
                             }
+                            out.audio_handle = None;
 
                             if let Some(audio_cfg) = &manifest.audio {
                                 match wallrs_audio::BackgroundAudioPlayer::from_config(
@@ -318,6 +322,7 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                             }
                         }
                     }
+                    state.maybe_stop_audio_capture();
 
                     if !matched {
                         Response::Error(format!("No matching output found for selector {output:?}"))
@@ -330,6 +335,8 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                 "shader" => {
                     let mut matched = false;
                     let mut error = None;
+
+                    let audio_handle = state.ensure_audio_capture();
 
                     let gpu = crate::output::GpuContext {
                         instance: &state.wgpu_instance,
@@ -366,6 +373,7 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                                 error = Some(e.to_string());
                                 break;
                             }
+                            out.audio_handle = audio_handle.clone();
 
                             if let Some(audio_cfg) = &manifest.audio {
                                 match wallrs_audio::BackgroundAudioPlayer::from_config(
@@ -437,8 +445,10 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                                 break;
                             }
                             out.audio_track = None;
+                            out.audio_handle = None;
                         }
                     }
+                    state.maybe_stop_audio_capture();
 
                     if !matched {
                         Response::Error(format!("No matching output found for selector {output:?}"))
