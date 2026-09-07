@@ -49,3 +49,4 @@ echo "wallrs preview image: $PREVIEW_IMAGE"
 echo "Generating Material You theme with matugen..."
 matugen image "$PREVIEW_IMAGE"
 echo "Theme applied successfully!"
+

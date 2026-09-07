@@ -7,7 +7,8 @@
 #
 # Description:
 #   Queries wallrs for the active wallpaper preview image, extracts the dominant
-#   vibrant accent color, and applies it to KDE Plasma via `kwriteconfig6` and D-Bus.
+#   vibrant accent color, and applies it to KDE Plasma via `plasma-apply-colorscheme`
+#   (or `kwriteconfig6` + KWin reconfigure), avoiding destructive shell refreshes.
 # ==============================================================================
 
 set -euo pipefail
@@ -29,18 +30,7 @@ if [[ -z "$WALLCTL" ]]; then
     fi
 fi
 
-# 2. Check for KDE configuration tools
-KWRITECONFIG=""
-if command -v kwriteconfig6 &>/dev/null; then
-    KWRITECONFIG="kwriteconfig6"
-elif command -v kwriteconfig5 &>/dev/null; then
-    KWRITECONFIG="kwriteconfig5"
-else
-    echo "Error: 'kwriteconfig6' or 'kwriteconfig5' not found. Is KDE Plasma installed?" >&2
-    exit 1
-fi
-
-# 3. Retrieve preview image path from wallrs
+# 2. Retrieve preview image path from wallrs
 PREVIEW_IMAGE="$("$WALLCTL" preview "$@")"
 
 if [[ -z "$PREVIEW_IMAGE" || ! -f "$PREVIEW_IMAGE" ]]; then
@@ -50,10 +40,10 @@ fi
 
 echo "wallrs preview image: $PREVIEW_IMAGE"
 
-# 4. Extract dominant accent color (RGB)
-RGB=""
+# 3. Extract dominant accent color (HEX & RGB)
+COLOR_OUTPUT=""
 if command -v python3 &>/dev/null; then
-    RGB="$(python3 - "$PREVIEW_IMAGE" << 'EOF'
+    COLOR_OUTPUT="$(python3 - "$PREVIEW_IMAGE" << 'EOF'
 import sys
 try:
     from PIL import Image
@@ -73,7 +63,8 @@ try:
             penalty = 0.1 if (brightness < 30 or brightness > 235) else 1.0
             return (sat * 2.0 + 0.5) * count * penalty
         best = max(colors, key=score)
-        print(f"{best[1][0]},{best[1][1]},{best[1][2]}")
+        r, g, b = best[1]
+        print(f"#{r:02x}{g:02x}{b:02x} {r},{g},{b}")
         sys.exit(0)
 except Exception:
     pass
@@ -83,31 +74,50 @@ EOF
 fi
 
 # Fallback with imagemagick if python extraction was empty
-if [[ -z "$RGB" ]] && command -v magick &>/dev/null; then
-    HEX="$(magick "$PREVIEW_IMAGE" -resize 1x1\! -format "%[hex:p{0,0}]" info: | head -c 6)"
-    R=$((16#${HEX:0:2}))
-    G=$((16#${HEX:2:2}))
-    B=$((16#${HEX:4:2}))
-    RGB="$R,$G,$B"
+if [[ -z "$COLOR_OUTPUT" ]] && command -v magick &>/dev/null; then
+    HEX_RAW="$(magick "$PREVIEW_IMAGE" -resize 1x1\! -format "%[hex:p{0,0}]" info: | head -c 6)"
+    R=$((16#${HEX_RAW:0:2}))
+    G=$((16#${HEX_RAW:2:2}))
+    B=$((16#${HEX_RAW:4:2}))
+    COLOR_OUTPUT="#$HEX_RAW $R,$G,$B"
 fi
 
-if [[ -z "$RGB" ]]; then
+if [[ -z "$COLOR_OUTPUT" ]]; then
     echo "Error: Failed to extract dominant color from '$PREVIEW_IMAGE'" >&2
     exit 1
 fi
 
-echo "Extracted accent color: RGB($RGB)"
+HEX="$(echo "$COLOR_OUTPUT" | awk '{print $1}')"
+RGB="$(echo "$COLOR_OUTPUT" | awk '{print $2}')"
 
-# 5. Apply to KDE Plasma kdeglobals
-"$KWRITECONFIG" --file kdeglobals --group General --key AccentColor "$RGB"
+echo "Extracted accent color: $HEX (RGB: $RGB)"
 
-# 6. Notify KWin and Plasma to reload colors
-if command -v qdbus6 &>/dev/null; then
-    qdbus6 org.kde.KWin /KWin org.kde.KWin.reconfigure 2>/dev/null || true
-    qdbus6 org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.refreshCurrentShell 2>/dev/null || true
-elif command -v qdbus &>/dev/null; then
-    qdbus org.kde.KWin /KWin org.kde.KWin.reconfigure 2>/dev/null || true
-    qdbus org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.refreshCurrentShell 2>/dev/null || true
+# 4. Apply to KDE Plasma
+# Prefer official plasma-apply-colorscheme tool which applies the accent color
+# cleanly across Qt/KDE/GTK apps without touching or crashing the desktop layer surface.
+if command -v plasma-apply-colorscheme &>/dev/null; then
+    SCHEME="$(grep -m1 '^ColorScheme=' "$HOME/.config/kdeglobals" 2>/dev/null | cut -d= -f2 || true)"
+    if [[ -z "$SCHEME" ]]; then
+        SCHEME="BreezeDark"
+    fi
+    plasma-apply-colorscheme --accent-color "$HEX" "$SCHEME"
+else
+    # Fallback to direct kwriteconfig + KWin reconfigure
+    KWRITECONFIG=""
+    if command -v kwriteconfig6 &>/dev/null; then
+        KWRITECONFIG="kwriteconfig6"
+    elif command -v kwriteconfig5 &>/dev/null; then
+        KWRITECONFIG="kwriteconfig5"
+    fi
+
+    if [[ -n "$KWRITECONFIG" ]]; then
+        "$KWRITECONFIG" --file kdeglobals --group General --key AccentColor "$RGB"
+        if command -v qdbus6 &>/dev/null; then
+            qdbus6 org.kde.KWin /KWin org.kde.KWin.reconfigure 2>/dev/null || true
+        elif command -v qdbus &>/dev/null; then
+            qdbus org.kde.KWin /KWin org.kde.KWin.reconfigure 2>/dev/null || true
+        fi
+    fi
 fi
 
-echo "KDE Plasma accent color successfully updated to $RGB!"
+echo "KDE Plasma accent color successfully updated to $HEX!"
