@@ -42,6 +42,7 @@ package() {
     install -Dm644 extra/systemd/wallrsd.service "$pkgdir/usr/lib/systemd/user/wallrsd.service"
     install -Dm644 extra/systemd/wallrs-theme-sync.path "$pkgdir/usr/lib/systemd/user/wallrs-theme-sync.path"
     install -Dm644 extra/systemd/wallrs-theme-sync.service "$pkgdir/usr/lib/systemd/user/wallrs-theme-sync.service"
+    install -Dm644 extra/systemd/wallrs-auto-pause.service "$pkgdir/usr/lib/systemd/user/wallrs-auto-pause.service"
     install -d "$pkgdir/usr/share/$pkgname/contrib"
     install -m755 contrib/*.sh "$pkgdir/usr/share/$pkgname/contrib/"
     install -Dm644 extra/metainfo/com.asdrome.wallrs.metainfo.xml "$pkgdir/usr/share/metainfo/com.asdrome.wallrs.metainfo.xml"

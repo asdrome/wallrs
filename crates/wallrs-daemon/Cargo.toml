@@ -61,8 +61,18 @@ assets = [
         "644",
     ],
     [
+        "../../extra/systemd/wallrs-auto-pause.service",
+        "usr/lib/systemd/user/wallrs-auto-pause.service",
+        "644",
+    ],
+    [
         "../../contrib/wallrs-theme-sync.sh",
         "usr/share/wallrs/contrib/wallrs-theme-sync.sh",
+        "755",
+    ],
+    [
+        "../../contrib/wallrs-auto-pause.sh",
+        "usr/share/wallrs/contrib/wallrs-auto-pause.sh",
         "755",
     ],
     [

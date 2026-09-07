@@ -14,8 +14,12 @@ set -euo pipefail
 # Locate the contrib scripts directory (adjacent to this script or in /usr/share/wallrs/contrib)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONTRIB_DIR="$SCRIPT_DIR"
-if [[ ! -f "$CONTRIB_DIR/kde-accent-color.sh" && -d "/usr/share/wallrs/contrib" ]]; then
-    CONTRIB_DIR="/usr/share/wallrs/contrib"
+if [[ ! -f "$CONTRIB_DIR/kde-accent-color.sh" ]]; then
+    if [[ -d "/usr/share/wallrs/contrib" ]]; then
+        CONTRIB_DIR="/usr/share/wallrs/contrib"
+    elif [[ -d "/usr/local/share/wallrs/contrib" ]]; then
+        CONTRIB_DIR="/usr/local/share/wallrs/contrib"
+    fi
 fi
 
 # 2. Desktop Environment Detection

@@ -42,6 +42,7 @@ install -Dm755 target/release/wallctl %{buildroot}%{_bindir}/wallctl
 install -Dm644 extra/systemd/wallrsd.service %{buildroot}%{_userunitdir}/wallrsd.service
 install -Dm644 extra/systemd/wallrs-theme-sync.path %{buildroot}%{_userunitdir}/wallrs-theme-sync.path
 install -Dm644 extra/systemd/wallrs-theme-sync.service %{buildroot}%{_userunitdir}/wallrs-theme-sync.service
+install -Dm644 extra/systemd/wallrs-auto-pause.service %{buildroot}%{_userunitdir}/wallrs-auto-pause.service
 install -d %{buildroot}%{_datadir}/%{name}/contrib
 install -m755 contrib/*.sh %{buildroot}%{_datadir}/%{name}/contrib/
 install -Dm644 extra/metainfo/com.asdrome.wallrs.metainfo.xml %{buildroot}%{_metainfodir}/com.asdrome.wallrs.metainfo.xml
@@ -60,6 +61,7 @@ cargo test --workspace --locked
 %{_userunitdir}/wallrsd.service
 %{_userunitdir}/wallrs-theme-sync.path
 %{_userunitdir}/wallrs-theme-sync.service
+%{_userunitdir}/wallrs-auto-pause.service
 %{_datadir}/%{name}/contrib
 %{_metainfodir}/com.asdrome.wallrs.metainfo.xml
 

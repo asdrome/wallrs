@@ -67,3 +67,34 @@ Connects `wallrs` to KDE Plasma's native accent color manager.
   ./contrib/kde-accent-color.sh
   ```
 
+---
+
+### 5. `wallrs-theme-sync.sh` (Desktop-Agnostic Theming Dispatcher)
+Dispatches theming updates automatically based on the running desktop environment (`$XDG_CURRENT_DESKTOP`).
+
+- **Workflow**:
+  - On KDE Plasma: executes `kde-accent-color.sh`.
+  - On Hyprland / Sway: executes `hyprland-matugen.sh` (or `matugen` directly).
+- **Systemd Integration (Recommended)**:
+  Enable the included systemd path unit so theming updates automatically whenever `wallrsd` changes the wallpaper:
+  ```bash
+  systemctl --user enable --now wallrs-theme-sync.path
+  ```
+
+---
+
+### 6. `wallrs-auto-pause.sh` (Desktop-Agnostic Auto-Pause Dispatcher)
+Dispatches automatic wallpaper pause/resume based on the running desktop environment (`$XDG_CURRENT_DESKTOP`).
+
+- **Workflow**:
+  - On KDE Plasma: executes `kde-auto-pause.sh` (monitoring KWin D-Bus window states).
+  - On Hyprland: executes `hyprland-auto-pause.sh` (monitoring socket2 IPC tiling state).
+  - On Sway / wlroots: informs that fullscreen pause is handled natively by `wallrsd` via `zwlr_foreign_toplevel_manager_v1`, idling with zero resource consumption.
+- **Systemd Integration (Recommended)**:
+  Enable the included systemd service so window tracking and pausing runs automatically with your desktop session:
+  ```bash
+  systemctl --user enable --now wallrs-auto-pause.service
+  ```
+
+
+

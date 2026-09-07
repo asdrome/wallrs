@@ -1,0 +1,17 @@
+[Unit]
+Description=Automatic pause/resume for wallrs live wallpapers
+Documentation=https://github.com/asdrome/wallrs
+PartOf=graphical-session.target
+After=graphical-session.target wallrsd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/share/wallrs/contrib/wallrs-auto-pause.sh
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical-session.target
+
