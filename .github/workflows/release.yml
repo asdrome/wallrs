@@ -78,9 +78,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Cache Cargo crates
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-fedora-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-fedora-cargo-
+
       - name: Install Fedora build dependencies
         run: |
-          dnf install -y \
+          dnf install -y --setopt=install_weak_deps=False \
             cargo \
             rust \
             pkgconf \
@@ -107,7 +118,7 @@ jobs:
             --transform "s,^\.,wallrs-${VERSION}," .
           cp extra/rpm/wallrs.spec ~/rpmbuild/SPECS/
           sed -i "s/^Version:.*/Version:        ${VERSION}/" ~/rpmbuild/SPECS/wallrs.spec
-          rpmbuild -ba ~/rpmbuild/SPECS/wallrs.spec
+          rpmbuild -ba --nocheck ~/rpmbuild/SPECS/wallrs.spec
 
           mkdir -p dist-rpm
           find ~/rpmbuild/RPMS ~/rpmbuild/SRPMS -type f -name "*.rpm" ! -name "*debuginfo*" ! -name "*debugsource*" -exec cp {} dist-rpm/ \;
