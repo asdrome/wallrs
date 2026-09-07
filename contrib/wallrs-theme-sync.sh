@@ -55,14 +55,14 @@ case "$DESKTOP" in
             exec "$CONTRIB_DIR/hyprland-matugen.sh" "$@"
         elif command -v matugen &>/dev/null; then
             PREVIEW_PATH="$("$WALLCTL" preview "$@")"
-            exec matugen image "$PREVIEW_PATH"
+            exec matugen image --prefer saturation "$PREVIEW_PATH"
         fi
         ;;
     *)
         # Fallback: check if matugen or pywal are available regardless of compositor
         if command -v matugen &>/dev/null; then
             PREVIEW_PATH="$("$WALLCTL" preview "$@")"
-            exec matugen image "$PREVIEW_PATH"
+            exec matugen image --prefer saturation "$PREVIEW_PATH"
         elif command -v wal &>/dev/null; then
             PREVIEW_PATH="$("$WALLCTL" preview "$@")"
             exec wal -i "$PREVIEW_PATH" -n -q

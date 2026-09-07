@@ -311,6 +311,12 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                 return Response::Error(format!("Output '{output}' has invalid dimensions"));
             }
 
+            let target_format = out
+                .surface_config
+                .as_ref()
+                .map(|c| c.format)
+                .unwrap_or(wgpu::TextureFormat::Bgra8UnormSrgb);
+
             let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
             let bytes_per_pixel = 4u32;
             let unpadded_bytes_per_row = width * bytes_per_pixel;
@@ -327,7 +333,7 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: target_format,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
@@ -367,8 +373,16 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                 queue: &state.wgpu_queue,
             };
 
-            renderer.update(&ctx);
-            renderer.render(&mut encoder, &view);
+            let render_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                renderer.update(&ctx);
+                renderer.render(&mut encoder, &view);
+            }));
+
+            if let Err(_panic_payload) = render_res {
+                return Response::Error(format!(
+                    "Renderer panicked while capturing screenshot on output '{output}'"
+                ));
+            }
 
             encoder.copy_texture_to_buffer(
                 wgpu::TexelCopyTextureInfo {
@@ -423,6 +437,28 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
 
                     drop(mapped_range);
                     output_buffer.unmap();
+
+                    // Swap R and B if target format is BGRA (standard on Wayland swapchains)
+                    if matches!(
+                        target_format,
+                        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+                    ) {
+                        for pixel in unpadded_bytes.chunks_exact_mut(4) {
+                            pixel.swap(0, 2);
+                        }
+                    } else if matches!(target_format, wgpu::TextureFormat::Rgb10a2Unorm) {
+                        let mut rgba8 = Vec::with_capacity((width * height * 4) as usize);
+                        for chunk in unpadded_bytes.chunks_exact(4) {
+                            let packed =
+                                u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                            let r = ((packed & 0x3FF) >> 2) as u8;
+                            let g = (((packed >> 10) & 0x3FF) >> 2) as u8;
+                            let b = (((packed >> 20) & 0x3FF) >> 2) as u8;
+                            let a = (((packed >> 30) & 0x3) * 85) as u8;
+                            rgba8.extend_from_slice(&[r, g, b, a]);
+                        }
+                        unpadded_bytes = rgba8;
+                    }
 
                     // Create parent directory if needed
                     if let Some(parent) = path.parent()
@@ -746,5 +782,16 @@ mod tests {
         let json = serde_json::to_string(&cmd).unwrap();
         let parsed: Command = serde_json::from_str(&json).unwrap();
         assert_eq!(cmd, parsed);
+    }
+
+    #[test]
+    fn test_screenshot_bgra_channel_swap() {
+        // Simulated BGRA buffer: Blue=200, Green=100, Red=50, Alpha=255
+        let mut buffer = vec![200u8, 100, 50, 255, 10, 20, 30, 255];
+        for pixel in buffer.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+        }
+        // After swap: Red=50, Green=100, Blue=200, Alpha=255
+        assert_eq!(buffer, vec![50, 100, 200, 255, 30, 20, 10, 255]);
     }
 }
