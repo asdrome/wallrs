@@ -1,5 +1,31 @@
+# Rust / Cargo build artifacts
 /target
 **/*.rs.bk
+*.cargo-ok
+
+# Python bytecode and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.pytest_cache/
+
+# Local packaging & build output
+dist/
+dist-*/
+*.rpm
+*.deb
+*.tar.gz
+*.tar.xz
+*.sha256
+rpmbuild/
+
+# Editor and system files
+.vscode/
+.idea/
 *.swp
+*.swo
 *~
 .DS_Store
+Thumbs.db

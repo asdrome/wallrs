@@ -36,6 +36,12 @@ pub enum Command {
     Resume {
         output: Option<String>,
     },
+    TogglePause {
+        output: Option<String>,
+    },
+    ToggleMute {
+        output: Option<String>,
+    },
     Screenshot {
         output: String,
         path: PathBuf,
@@ -51,6 +57,8 @@ pub struct OutputInfoProto {
     pub width: u32,
     pub height: u32,
     pub paused: bool,
+    #[serde(default)]
+    pub muted: bool,
 }
 
 /// Responses emitted by `wallrsd` over the control Unix domain socket.
@@ -81,6 +89,8 @@ pub struct WallpaperManifest {
     pub shader: Option<ShaderConfig>,
     #[serde(default)]
     pub video: Option<VideoConfig>,
+    #[serde(default)]
+    pub audio: Option<AudioTrackConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,6 +134,15 @@ pub struct ShaderConfig {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VideoConfig {
+    pub path: PathBuf,
+    #[serde(default)]
+    pub volume: Option<f32>,
+    #[serde(default)]
+    pub r#loop: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioTrackConfig {
     pub path: PathBuf,
     #[serde(default)]
     pub volume: Option<f32>,
@@ -190,6 +209,20 @@ mod tests {
         let parsed: Command = serde_json::from_str(&json).unwrap();
         assert_eq!(cmd, parsed);
 
+        let cmd_toggle = Command::TogglePause {
+            output: Some("HDMI-A-1".into()),
+        };
+        let json_toggle = serde_json::to_string(&cmd_toggle).unwrap();
+        let parsed_toggle: Command = serde_json::from_str(&json_toggle).unwrap();
+        assert_eq!(cmd_toggle, parsed_toggle);
+
+        let cmd_mute = Command::ToggleMute {
+            output: Some("DP-1".into()),
+        };
+        let json_mute = serde_json::to_string(&cmd_mute).unwrap();
+        let parsed_mute: Command = serde_json::from_str(&json_mute).unwrap();
+        assert_eq!(cmd_mute, parsed_mute);
+
         let cmd_list = Command::ListOutputs;
         let json_list = serde_json::to_string(&cmd_list).unwrap();
         let parsed_list: Command = serde_json::from_str(&json_list).unwrap();
@@ -203,6 +236,7 @@ mod tests {
             width: 1920,
             height: 1080,
             paused: false,
+            muted: false,
         }]);
         let json = serde_json::to_string(&resp).unwrap();
         let parsed: Response = serde_json::from_str(&json).unwrap();
@@ -250,5 +284,30 @@ pan = { speed = 0.02, axis = "x" }
         let pan = image.layers[1].pan.as_ref().unwrap();
         assert_eq!(pan.speed, 0.02);
         assert_eq!(pan.axis, "x");
+        assert!(manifest.audio.is_none());
+    }
+
+    #[test]
+    fn test_wallpaper_manifest_with_audio() {
+        let toml_data = r#"
+[wallpaper]
+type = "image"
+name = "cyber-cafe"
+
+[[image.layers]]
+path = "cafe.png"
+
+[audio]
+path = "ambient.ogg"
+volume = 35.5
+loop = true
+"#;
+
+        let manifest = WallpaperManifest::from_toml_str(toml_data).expect("failed to parse TOML");
+        assert_eq!(manifest.wallpaper.name, "cyber-cafe");
+        let audio = manifest.audio.expect("audio config missing");
+        assert_eq!(audio.path, PathBuf::from("ambient.ogg"));
+        assert_eq!(audio.volume, Some(35.5));
+        assert_eq!(audio.r#loop, Some(true));
     }
 }

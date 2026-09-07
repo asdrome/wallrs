@@ -21,6 +21,18 @@ struct Args {
     /// Disable automatic pausing of wallpaper rendering when a window is in fullscreen
     #[arg(long)]
     no_fullscreen_pause: bool,
+
+    /// Disable automatic pausing of wallpaper rendering when a window is maximized
+    #[arg(long)]
+    no_pause_on_maximized: bool,
+
+    /// Allow audio playback from wallpapers by default (default: false, audio is muted)
+    #[arg(long)]
+    allow_audio: bool,
+
+    /// Legacy flag retained for backward compatibility (pause on maximized is now default)
+    #[arg(long, hide = true)]
+    pause_on_maximized: bool,
 }
 
 fn parse_color(s: &str) -> Result<[f32; 4], String> {
@@ -84,11 +96,14 @@ fn main() {
         }
     };
 
+    let pause_on_maximized = !args.no_pause_on_maximized;
+
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
         color = ?initial_color,
         fps = ?args.fps,
         fullscreen_pause = !args.no_fullscreen_pause,
+        pause_on_maximized,
         "Initializing wallrsd live wallpaper daemon"
     );
 
@@ -96,6 +111,8 @@ fn main() {
         socket_path: None,
         max_fps: args.fps,
         fullscreen_pause: !args.no_fullscreen_pause,
+        pause_on_maximized,
+        allow_audio: args.allow_audio,
     };
 
     let mut engine = match Engine::with_config(
@@ -142,6 +159,7 @@ mod tests {
         assert!((c6[3] - 1.0).abs() < 1e-4);
 
         let c8 = parse_color("#00ff0080").unwrap();
+        assert!((c8[0] - 0.0).abs() < 1e-4);
         assert!((c8[1] - 1.0).abs() < 1e-4);
         assert!((c8[3] - 0.5019).abs() < 1e-3);
     }
@@ -155,11 +173,13 @@ mod tests {
             "--fps",
             "60",
             "--no-fullscreen-pause",
+            "--no-pause-on-maximized",
         ])
         .unwrap();
 
         assert_eq!(args.color, "#123456");
         assert_eq!(args.fps, Some(60));
         assert!(args.no_fullscreen_pause);
+        assert!(args.no_pause_on_maximized);
     }
 }

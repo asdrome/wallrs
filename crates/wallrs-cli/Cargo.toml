@@ -10,6 +10,9 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { workspace = true }
+image = { workspace = true }
+naga = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+wallrs-content-shader = { path = "../wallrs-content-shader" }
 wallrs-proto = { path = "../wallrs-proto" }

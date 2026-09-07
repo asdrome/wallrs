@@ -6,7 +6,9 @@ license.workspace = true
 
 [dependencies]
 arc-swap = { workspace = true }
+libmpv2 = { workspace = true }
 pipewire = { workspace = true }
 rustfft = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+wallrs-proto = { path = "../wallrs-proto" }

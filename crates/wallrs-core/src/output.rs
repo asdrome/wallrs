@@ -44,6 +44,8 @@ pub struct OutputSurface {
     pub last_rendered_frame_time: Option<Instant>,
     pub cursor_position: Option<(f32, f32)>,
     pub audio_handle: Option<wallrs_audio::SpectrumHandle>,
+    pub audio_track: Option<wallrs_audio::BackgroundAudioPlayer>,
+    pub audio_muted: bool,
 }
 
 /// Bundles WGPU rendering context references passed to output configuration.
@@ -79,6 +81,8 @@ impl OutputSurface {
             last_rendered_frame_time: None,
             cursor_position: None,
             audio_handle: None,
+            audio_track: None,
+            audio_muted: true,
         }
     }
 
@@ -187,7 +191,12 @@ impl OutputSurface {
         queue: &wgpu::Queue,
         qh: &QueueHandle<EngineState>,
     ) {
-        if self.is_paused() || !self.configured {
+        if !self.configured {
+            return;
+        }
+
+        let is_initial_frame = self.last_rendered_frame_time.is_none();
+        if self.is_paused() && !is_initial_frame {
             return;
         }
 
@@ -288,11 +297,13 @@ impl OutputSurface {
         queue.present(surface_texture);
         self.last_rendered_frame_time = Some(now);
 
-        // Request next frame callback to adhere to display refresh rate
-        self.layer_surface.wl_surface().frame(
-            qh,
-            FrameCallbackData(self.layer_surface.wl_surface().clone()),
-        );
+        // Only request next frame callback if not currently paused
+        if !self.is_paused() {
+            self.layer_surface.wl_surface().frame(
+                qh,
+                FrameCallbackData(self.layer_surface.wl_surface().clone()),
+            );
+        }
         self.layer_surface.commit();
     }
 
@@ -313,7 +324,7 @@ impl OutputSurface {
             old.teardown();
         }
         self.renderer = Some(renderer);
-        if self.configured && !self.is_paused() {
+        if self.configured {
             self.render_frame(gpu.device, gpu.queue, qh);
         }
         Ok(())
@@ -326,10 +337,37 @@ impl OutputSurface {
         value: wallrs_proto::PropertyValue,
         qh: &QueueHandle<EngineState>,
     ) -> Result<(), OutputError> {
+        if key == "mute"
+            && let wallrs_proto::PropertyValue::Bool(b) = value
+        {
+            self.set_muted(b);
+            return Ok(());
+        }
+
+        if key == "volume" {
+            let mut handled = false;
+            if let Some(renderer) = &mut self.renderer
+                && renderer.set_property(key, value.clone()).is_ok()
+            {
+                handled = true;
+            }
+            if let Some(player) = &mut self.audio_track
+                && player.set_property(key, value.clone()).is_ok()
+            {
+                handled = true;
+            }
+            if handled {
+                return Ok(());
+            }
+        }
+
         if let Some(renderer) = &mut self.renderer {
             renderer
-                .set_property(key, value)
+                .set_property(key, value.clone())
                 .map_err(|e| OutputError::Renderer(e.to_string()))?;
+        }
+        if let Some(player) = &mut self.audio_track {
+            let _ = player.set_property(key, value);
         }
         if self.configured && !self.is_paused() {
             self.layer_surface.wl_surface().frame(
@@ -341,12 +379,39 @@ impl OutputSurface {
         Ok(())
     }
 
+    /// Sets the muted state for this output's renderer and background audio track.
+    pub fn set_muted(&mut self, muted: bool) {
+        self.audio_muted = muted;
+        if let Some(renderer) = &mut self.renderer {
+            let _ = renderer.set_property("mute", wallrs_proto::PropertyValue::Bool(muted));
+        }
+        if let Some(player) = &mut self.audio_track {
+            let _ = player.set_property("mute", wallrs_proto::PropertyValue::Bool(muted));
+        }
+    }
+
+    /// Toggles the muted state of this output and returns the new state.
+    pub fn toggle_mute(&mut self) -> bool {
+        let new_state = !self.audio_muted;
+        self.set_muted(new_state);
+        new_state
+    }
+
     /// Sets the manual paused state of this output (e.g., from `wallctl pause`).
     /// If resuming from a paused state, commits a new frame callback to wake up rendering.
     pub fn set_manual_paused(&mut self, paused: bool, qh: &QueueHandle<EngineState>) {
         let was_paused = self.is_paused();
         self.manual_paused = paused;
         let is_paused = self.is_paused();
+        if was_paused != is_paused {
+            if let Some(renderer) = &mut self.renderer {
+                let _ =
+                    renderer.set_property("pause", wallrs_proto::PropertyValue::Bool(is_paused));
+            }
+            if let Some(player) = &mut self.audio_track {
+                player.set_paused(is_paused);
+            }
+        }
         if was_paused && !is_paused && self.configured {
             self.layer_surface.wl_surface().frame(
                 qh,
@@ -361,6 +426,15 @@ impl OutputSurface {
         let was_paused = self.is_paused();
         self.fullscreen_paused = paused;
         let is_paused = self.is_paused();
+        if was_paused != is_paused {
+            if let Some(renderer) = &mut self.renderer {
+                let _ =
+                    renderer.set_property("pause", wallrs_proto::PropertyValue::Bool(is_paused));
+            }
+            if let Some(player) = &mut self.audio_track {
+                player.set_paused(is_paused);
+            }
+        }
         if was_paused && !is_paused && self.configured {
             self.layer_surface.wl_surface().frame(
                 qh,
@@ -380,6 +454,8 @@ impl OutputSurface {
         if let Some(mut renderer) = self.renderer.take() {
             renderer.teardown();
         }
+        self.audio_track = None;
+        self.audio_handle = None;
         self.wgpu_surface = None;
         self.surface_config = None;
     }

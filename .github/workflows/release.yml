@@ -1,0 +1,140 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-deb-and-tarball:
+    name: Build DEB and Generic Tarball (Ubuntu)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install system build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libvulkan-dev \
+            libpipewire-0.3-dev \
+            libmpv-dev \
+            libwayland-dev
+
+      - name: Install cargo-deb
+        run: |
+          curl -LsSf https://github.com/cargo-bins/cargo-binstall/releases/latest/download/cargo-binstall-x86_64-unknown-linux-musl.tgz | tar -xzf - -C ~/.cargo/bin
+          cargo binstall --no-confirm cargo-deb || cargo install cargo-deb --locked
+
+      - name: Compile release binaries
+        run: cargo build --release --locked
+
+      - name: Build Debian package
+        run: cargo deb -p wallrs-daemon --no-build
+
+      - name: Create generic release tarball and SHA256
+        run: |
+          VERSION="${GITHUB_REF_NAME:-v0.1.0}"
+          DIST_NAME="wallrs-${VERSION}-x86_64-unknown-linux-gnu"
+          mkdir -p "${DIST_NAME}"
+          cp target/release/wallrsd "${DIST_NAME}/"
+          cp target/release/wallctl "${DIST_NAME}/"
+          cp extra/systemd/wallrsd.service "${DIST_NAME}/"
+          cp README.md LICENSE-MIT LICENSE-APACHE "${DIST_NAME}/"
+          tar -czf "${DIST_NAME}.tar.gz" "${DIST_NAME}"
+          sha256sum "${DIST_NAME}.tar.gz" > "${DIST_NAME}.tar.gz.sha256"
+
+          mkdir -p dist-assets
+          cp target/debian/*.deb dist-assets/
+          cp "${DIST_NAME}.tar.gz" dist-assets/
+          cp "${DIST_NAME}.tar.gz.sha256" dist-assets/
+
+      - name: Upload Debian and Tarball artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-and-tarball
+          path: dist-assets/*
+          retention-days: 1
+
+  build-rpm:
+    name: Build RPM Package (Fedora container)
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Install Fedora build dependencies
+        run: |
+          dnf install -y \
+            cargo \
+            rust \
+            pkgconf \
+            pipewire-devel \
+            mpv-devel \
+            wayland-devel \
+            vulkan-loader-devel \
+            systemd-rpm-macros \
+            rpm-build \
+            git \
+            tar
+
+      - name: Build RPM and SRPM
+        run: |
+          TAG_NAME="${GITHUB_REF_NAME:-v0.1.0}"
+          VERSION="${TAG_NAME#v}"
+          mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+          git archive --format=tar.gz --prefix="wallrs-${VERSION}/" -o ~/rpmbuild/SOURCES/"wallrs-${VERSION}.tar.gz" HEAD
+          cp extra/rpm/wallrs.spec ~/rpmbuild/SPECS/
+          sed -i "s/^Version:.*/Version:        ${VERSION}/" ~/rpmbuild/SPECS/wallrs.spec
+          rpmbuild -ba ~/rpmbuild/SPECS/wallrs.spec
+
+          mkdir -p dist-rpm
+          find ~/rpmbuild/RPMS ~/rpmbuild/SRPMS -type f -name "*.rpm" -exec cp {} dist-rpm/ \;
+
+      - name: Upload RPM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-packages
+          path: dist-rpm/*.rpm
+          retention-days: 1
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-deb-and-tarball, build-rpm]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Publish Release Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-artifacts/*
+            extra/rpm/wallrs.spec
+          generate_release_notes: true
+

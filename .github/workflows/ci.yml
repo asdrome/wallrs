@@ -1,57 +1,92 @@
 name: CI
 
 on:
-  # push:
-  #   branches: [ "main" ]
-  # pull_request:
-  #   branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+    types: [ opened, synchronize, reopened, ready_for_review ]
+  push:
+    branches: [ "main" ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
 
 jobs:
-  check-and-test:
-    runs-on: ubuntu-latest
+  # ---------------------------------------------------------------------------
+  # Fast checks (PR Gatekeeper)
+  # Runs on non-draft PRs targeting main and post-merge pushes to main.
+  # ---------------------------------------------------------------------------
+  pr-gatekeeper:
+    name: pr-gatekeeper
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'push' || !github.event.pull_request.draft
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
-      - name: Cache Cargo dependencies
-        uses: actions/cache@v4
+      - name: Cache Rust dependencies and build artifacts
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+          shared-key: "wallrs-ci"
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libwayland-dev \
-            libpipewire-0.3-dev \
-            libspa-0.2-dev \
+            pkg-config \
             libvulkan-dev \
-            pkg-config
+            libpipewire-0.3-dev \
+            libmpv-dev \
+            libwayland-dev
 
-      - name: Format check
+      - name: Check code formatting
         run: cargo fmt --all -- --check
 
-      - name: Clippy linting
+      - name: Lint workspace with Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Build workspace
-        run: cargo build --workspace --verbose
+      - name: Run workspace tests
+        run: cargo test --workspace --locked
 
-      - name: Test workspace
-        run: cargo test --workspace --verbose
+  # ---------------------------------------------------------------------------
+  # Heavy tasks (Post-Merge Release Build)
+  # Runs only on push to main branch to verify release compilation.
+  # ---------------------------------------------------------------------------
+  post-merge-build:
+    name: post-merge-build
+    needs: pr-gatekeeper
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "wallrs-ci"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libvulkan-dev \
+            libpipewire-0.3-dev \
+            libmpv-dev \
+            libwayland-dev
+
+      - name: Verify release build
+        run: cargo build --release --locked

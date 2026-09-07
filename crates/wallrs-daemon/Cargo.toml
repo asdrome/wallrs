@@ -3,6 +3,7 @@ name = "wallrs-daemon"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Wayland live wallpaper daemon"
 
 [[bin]]
 name = "wallrsd"
@@ -18,3 +19,37 @@ wallrs-content-shader = { path = "../wallrs-content-shader" }
 wallrs-content-video = { path = "../wallrs-content-video" }
 wallrs-core = { path = "../wallrs-core" }
 wallrs-render = { path = "../wallrs-render" }
+
+[package.metadata.deb]
+name = "wallrs"
+maintainer = "Antonio S. Dromundo <sebastiandromundo@outlook.com>"
+copyright = "2026, Antonio S. Dromundo"
+license-file = ["../../LICENSE-MIT", "4"]
+depends = "$auto, libvulkan1, libpipewire-0.3-0, libmpv2 | libmpv1, libwayland-client0"
+section = "graphics"
+priority = "optional"
+extended-description = """\
+High-performance Wayland-native live wallpaper daemon and CLI controller \
+written in pure Rust with wgpu/Vulkan, PipeWire, and libmpv2."""
+assets = [
+    [
+        "target/release/wallrsd",
+        "usr/bin/wallrsd",
+        "755",
+    ],
+    [
+        "target/release/wallctl",
+        "usr/bin/wallctl",
+        "755",
+    ],
+    [
+        "../../extra/systemd/wallrsd.service",
+        "usr/lib/systemd/user/wallrsd.service",
+        "644",
+    ],
+    [
+        "../../README.md",
+        "usr/share/doc/wallrs/README.md",
+        "644",
+    ],
+]

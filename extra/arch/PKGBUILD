@@ -1,0 +1,47 @@
+# Maintainer: Antonio S. Dromundo <sebastiandromundo@outlook.com>
+pkgname=wallrs
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="High-performance, Wayland-native live wallpaper daemon and CLI client written in Rust"
+arch=('x86_64' 'aarch64')
+url="https://github.com/asdromundo/wallrs"
+license=('MIT' 'Apache-2.0')
+depends=('vulkan-icd-loader' 'pipewire' 'mpv')
+makedepends=('cargo' 'pkgconf' 'wayland')
+optdepends=(
+    'vulkan-radeon: Vulkan driver for AMD GPUs'
+    'vulkan-intel: Vulkan driver for Intel GPUs'
+    'nvidia-utils: Vulkan driver for NVIDIA GPUs'
+)
+source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --frozen --release --all-targets
+}
+
+check() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo test --frozen --workspace
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    install -Dm755 target/release/wallrsd "$pkgdir/usr/bin/wallrsd"
+    install -Dm755 target/release/wallctl "$pkgdir/usr/bin/wallctl"
+    install -Dm644 extra/systemd/wallrsd.service "$pkgdir/usr/lib/systemd/user/wallrsd.service"
+    install -Dm644 LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
+    install -Dm644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
+

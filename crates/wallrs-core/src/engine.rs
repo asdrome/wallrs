@@ -66,8 +66,15 @@ pub enum EngineError {
 pub struct ToplevelData {
     pub handle: ZwlrForeignToplevelHandleV1,
     pub outputs: HashSet<u32>,
+    pub app_id: Option<String>,
+    pub title: Option<String>,
     pub is_fullscreen: bool,
+    pub is_maximized: bool,
+    pub is_activated: bool,
     pub pending_fullscreen: Option<bool>,
+    pub pending_maximized: Option<bool>,
+    pub pending_activated: Option<bool>,
+    pub outputs_changed: bool,
 }
 
 /// Holds all state managed by the Wayland and render event loop.
@@ -86,8 +93,11 @@ pub struct EngineState {
     pub outputs: HashMap<ObjectId, OutputSurface>,
     pub renderer_factory: Arc<dyn Fn() -> Box<dyn WallpaperRenderer>>,
     pub audio_handle: Option<wallrs_audio::SpectrumHandle>,
+    pub audio_capture: Option<wallrs_audio::AudioCapture>,
     pub max_fps: Option<u32>,
     pub fullscreen_pause: bool,
+    pub pause_on_maximized: bool,
+    pub allow_audio: bool,
     pub toplevel_manager: Option<ZwlrForeignToplevelManagerV1>,
     pub toplevels: HashMap<ObjectId, ToplevelData>,
     pub exit: bool,
@@ -162,7 +172,7 @@ impl OutputHandler for EngineState {
             qh,
             surface,
             Layer::Background,
-            Some("wallrs"),
+            Some("desktop"),
             Some(&output),
         );
 
@@ -176,6 +186,9 @@ impl OutputHandler for EngineState {
         let mut output_surface = OutputSurface::new(name, output, layer_surface, self.max_fps);
         output_surface.audio_handle = self.audio_handle.clone();
         self.outputs.insert(surface_id, output_surface);
+        if self.fullscreen_pause {
+            self.update_fullscreen_pause();
+        }
     }
 
     fn update_output(
@@ -211,6 +224,7 @@ impl OutputHandler for EngineState {
             if let Some(mut out) = self.outputs.remove(&id) {
                 out.teardown();
             }
+            self.maybe_stop_audio_capture();
         }
     }
 }
@@ -221,6 +235,7 @@ impl LayerShellHandler for EngineState {
         if let Some(mut out) = self.outputs.remove(&surface_id) {
             tracing::info!(output = ?out.name, "Layer surface closed by compositor");
             out.teardown();
+            self.maybe_stop_audio_capture();
         }
     }
 
@@ -345,8 +360,15 @@ impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for EngineState {
                     ToplevelData {
                         handle: toplevel,
                         outputs: HashSet::new(),
+                        app_id: None,
+                        title: None,
                         is_fullscreen: false,
+                        is_maximized: false,
+                        is_activated: false,
                         pending_fullscreen: None,
+                        pending_maximized: None,
+                        pending_activated: None,
+                        outputs_changed: false,
                     },
                 );
             }
@@ -373,35 +395,79 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for EngineState {
     ) {
         let id = proxy.id();
         match event {
-            zwlr_foreign_toplevel_handle_v1::Event::OutputEnter { output } => {
+            zwlr_foreign_toplevel_handle_v1::Event::Title { title } => {
                 if let Some(data) = state.toplevels.get_mut(&id) {
-                    data.outputs.insert(output.id().protocol_id());
+                    data.title = Some(title);
+                }
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::AppId { app_id } => {
+                if let Some(data) = state.toplevels.get_mut(&id) {
+                    data.app_id = Some(app_id);
+                }
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::OutputEnter { output } => {
+                if let Some(data) = state.toplevels.get_mut(&id)
+                    && data.outputs.insert(output.id().protocol_id())
+                {
+                    data.outputs_changed = true;
                 }
             }
             zwlr_foreign_toplevel_handle_v1::Event::OutputLeave { output } => {
-                if let Some(data) = state.toplevels.get_mut(&id) {
-                    data.outputs.remove(&output.id().protocol_id());
+                if let Some(data) = state.toplevels.get_mut(&id)
+                    && data.outputs.remove(&output.id().protocol_id())
+                {
+                    data.outputs_changed = true;
                 }
             }
             zwlr_foreign_toplevel_handle_v1::Event::State { state: state_bytes } => {
                 if let Some(data) = state.toplevels.get_mut(&id) {
-                    // Enum entry 3 corresponds to Fullscreen
-                    let is_fullscreen = state_bytes
-                        .as_chunks::<4>()
-                        .0
-                        .iter()
-                        .any(|chunk| u32::from_ne_bytes(*chunk) == 3);
+                    // Enum entries in zwlr_foreign_toplevel_handle_v1::state:
+                    // 0 = maximized, 1 = minimized, 2 = activated, 3 = fullscreen
+                    let chunks = state_bytes.as_chunks::<4>().0;
+                    let is_maximized = chunks.iter().any(|chunk| u32::from_ne_bytes(*chunk) == 0);
+                    let is_activated = chunks.iter().any(|chunk| u32::from_ne_bytes(*chunk) == 2);
+                    let is_fullscreen = chunks.iter().any(|chunk| u32::from_ne_bytes(*chunk) == 3);
+                    data.pending_maximized = Some(is_maximized);
+                    data.pending_activated = Some(is_activated);
                     data.pending_fullscreen = Some(is_fullscreen);
                 }
             }
             zwlr_foreign_toplevel_handle_v1::Event::Done => {
                 let mut changed = false;
-                if let Some(data) = state.toplevels.get_mut(&id)
-                    && let Some(fs) = data.pending_fullscreen.take()
-                    && data.is_fullscreen != fs
-                {
-                    data.is_fullscreen = fs;
-                    changed = true;
+                if let Some(data) = state.toplevels.get_mut(&id) {
+                    if data.outputs_changed {
+                        data.outputs_changed = false;
+                        changed = true;
+                    }
+                    if let Some(fs) = data.pending_fullscreen.take()
+                        && data.is_fullscreen != fs
+                    {
+                        data.is_fullscreen = fs;
+                        changed = true;
+                    }
+                    if let Some(max) = data.pending_maximized.take()
+                        && data.is_maximized != max
+                    {
+                        data.is_maximized = max;
+                        changed = true;
+                    }
+                    if let Some(act) = data.pending_activated.take()
+                        && data.is_activated != act
+                    {
+                        data.is_activated = act;
+                        changed = true;
+                    }
+                    if changed {
+                        tracing::info!(
+                            app_id = ?data.app_id,
+                            title = ?data.title,
+                            is_fullscreen = data.is_fullscreen,
+                            is_maximized = data.is_maximized,
+                            is_activated = data.is_activated,
+                            outputs = ?data.outputs,
+                            "Toplevel window state changed"
+                        );
+                    }
                 }
                 if changed && state.fullscreen_pause {
                     state.update_fullscreen_pause();
@@ -410,7 +476,9 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for EngineState {
             zwlr_foreign_toplevel_handle_v1::Event::Closed => {
                 if let Some(data) = state.toplevels.remove(&id) {
                     data.handle.destroy();
-                    if data.is_fullscreen && state.fullscreen_pause {
+                    let was_blocking =
+                        data.is_fullscreen || (state.pause_on_maximized && data.is_maximized);
+                    if was_blocking && state.fullscreen_pause {
                         state.update_fullscreen_pause();
                     }
                 }
@@ -421,20 +489,70 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for EngineState {
 }
 
 impl EngineState {
-    /// Recalculates fullscreen pause status for all active outputs.
+    /// Recalculates fullscreen/maximized pause status for all active outputs.
     pub fn update_fullscreen_pause(&mut self) {
-        let mut fullscreen_outputs = HashSet::new();
+        let mut paused_outputs = HashSet::new();
         for toplevel in self.toplevels.values() {
-            if toplevel.is_fullscreen {
-                for &out_id in &toplevel.outputs {
-                    fullscreen_outputs.insert(out_id);
+            let is_blocking =
+                toplevel.is_fullscreen || (self.pause_on_maximized && toplevel.is_maximized);
+            if is_blocking {
+                if toplevel.outputs.is_empty() {
+                    for out in self.outputs.values() {
+                        paused_outputs.insert(out.wl_output.id().protocol_id());
+                    }
+                } else {
+                    for &out_id in &toplevel.outputs {
+                        paused_outputs.insert(out_id);
+                    }
                 }
             }
         }
 
+        tracing::info!(
+            pause_on_maximized = self.pause_on_maximized,
+            paused_output_count = paused_outputs.len(),
+            "Evaluated fullscreen/maximized pause state across outputs"
+        );
+
         for out in self.outputs.values_mut() {
-            let should_pause = fullscreen_outputs.contains(&out.wl_output.id().protocol_id());
+            let should_pause = paused_outputs.contains(&out.wl_output.id().protocol_id());
             out.set_fullscreen_paused(should_pause, &self.qh);
+        }
+    }
+
+    /// Ensures PipeWire audio capture is running, starting it on demand if necessary.
+    pub fn ensure_audio_capture(&mut self) -> Option<wallrs_audio::SpectrumHandle> {
+        if let Some(handle) = &self.audio_handle {
+            return Some(handle.clone());
+        }
+
+        match wallrs_audio::AudioCapture::start(32) {
+            Ok(capture) => {
+                let handle = capture.spectrum_handle();
+                self.audio_handle = Some(handle.clone());
+                self.audio_capture = Some(capture);
+                tracing::info!("PipeWire audio capture started on demand (32 frequency bands)");
+                Some(handle)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = ?e,
+                    "PipeWire audio capture unavailable; running in silent mode"
+                );
+                None
+            }
+        }
+    }
+
+    /// Stops PipeWire audio capture if no outputs currently have an active audio handle.
+    pub fn maybe_stop_audio_capture(&mut self) {
+        let any_audio = self.outputs.values().any(|out| out.audio_handle.is_some());
+        if !any_audio && self.audio_capture.is_some() {
+            tracing::info!("No active audio-reactive outputs; stopping PipeWire audio capture");
+            if let Some(mut capture) = self.audio_capture.take() {
+                capture.stop();
+            }
+            self.audio_handle = None;
         }
     }
 }
@@ -483,6 +601,8 @@ impl Engine {
             .unwrap_or_else(wallrs_proto::default_socket_path);
         let max_fps = config.max_fps;
         let fullscreen_pause = config.fullscreen_pause;
+        let pause_on_maximized = config.pause_on_maximized;
+        let allow_audio = config.allow_audio;
 
         tracing::info!("Connecting to Wayland display");
         let conn = Connection::connect_to_env()
@@ -579,21 +699,6 @@ impl Engine {
         let ipc_listener = ipc::bind_socket(&socket_path)?;
         ipc::register_ipc_source(event_loop.handle(), ipc_listener)?;
 
-        // Initialize PipeWire audio capture (falls back gracefully to silent mode if unavailable)
-        let audio_handle = match wallrs_audio::spawn_capture(32) {
-            Ok((handle, _thread)) => {
-                tracing::info!("PipeWire audio capture initialized (32 frequency bands)");
-                Some(handle)
-            }
-            Err(e) => {
-                tracing::warn!(
-                    error = ?e,
-                    "PipeWire audio capture unavailable; running in silent mode"
-                );
-                None
-            }
-        };
-
         let state = EngineState {
             qh,
             registry_state,
@@ -608,9 +713,12 @@ impl Engine {
             wgpu_queue,
             outputs: HashMap::new(),
             renderer_factory: Arc::new(renderer_factory),
-            audio_handle,
+            audio_handle: None,
+            audio_capture: None,
             max_fps,
             fullscreen_pause,
+            pause_on_maximized,
+            allow_audio,
             toplevel_manager,
             toplevels: HashMap::new(),
             exit: false,
