@@ -46,7 +46,7 @@ jobs:
 
       - name: Create generic release tarball and SHA256
         run: |
-          VERSION="${GITHUB_REF_NAME:-v0.1.0}"
+          VERSION="${GITHUB_REF_NAME:-v1.0.0}"
           DIST_NAME="wallrs-${VERSION}-x86_64-unknown-linux-gnu"
           mkdir -p "${DIST_NAME}"
           cp target/release/wallrsd "${DIST_NAME}/"
@@ -70,15 +70,12 @@ jobs:
 
   build-rpm:
     name: Build RPM Package (Fedora container)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container:
       image: fedora:latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Configure safe git directory
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Install Fedora build dependencies
         run: |
@@ -95,9 +92,12 @@ jobs:
             git \
             tar
 
+      - name: Configure safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Build RPM and SRPM
         run: |
-          TAG_NAME="${GITHUB_REF_NAME:-v0.1.0}"
+          TAG_NAME="${GITHUB_REF_NAME:-v1.0.0}"
           VERSION="${TAG_NAME#v}"
           mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
           git archive --format=tar.gz --prefix="wallrs-${VERSION}/" -o ~/rpmbuild/SOURCES/"wallrs-${VERSION}.tar.gz" HEAD
@@ -118,7 +118,7 @@ jobs:
   publish-release:
     name: Publish GitHub Release
     needs: [build-deb-and-tarball, build-rpm]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Checkout repository
