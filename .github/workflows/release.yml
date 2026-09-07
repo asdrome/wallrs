@@ -92,15 +92,16 @@ jobs:
             git \
             tar
 
-      - name: Configure safe git directory
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
       - name: Build RPM and SRPM
         run: |
           TAG_NAME="${GITHUB_REF_NAME:-v1.0.0}"
           VERSION="${TAG_NAME#v}"
           mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
-          git archive --format=tar.gz --prefix="wallrs-${VERSION}/" -o ~/rpmbuild/SOURCES/"wallrs-${VERSION}.tar.gz" HEAD
+          tar -czf ~/rpmbuild/SOURCES/"wallrs-${VERSION}.tar.gz" \
+            --exclude-vcs \
+            --exclude="./target" \
+            --exclude="./dist*" \
+            --transform "s,^\.,wallrs-${VERSION}," .
           cp extra/rpm/wallrs.spec ~/rpmbuild/SPECS/
           sed -i "s/^Version:.*/Version:        ${VERSION}/" ~/rpmbuild/SPECS/wallrs.spec
           rpmbuild -ba ~/rpmbuild/SPECS/wallrs.spec
