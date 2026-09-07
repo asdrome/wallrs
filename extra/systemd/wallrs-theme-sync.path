@@ -1,10 +1,11 @@
 [Unit]
 Description=Watch wallrs state changes to synchronize desktop theme and accent color
 Documentation=https://github.com/asdrome/wallrs
-PartOf=wallrsd.service
+PartOf=graphical-session.target
+After=graphical-session.target
 
 [Path]
-PathModified=%h/.local/state/wallrs/state.json
+PathChanged=%h/.local/state/wallrs/state.json
 
 [Install]
 WantedBy=graphical-session.target

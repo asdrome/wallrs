@@ -60,4 +60,3 @@ case "$DESKTOP" in
         exit 0
         ;;
 esac
-

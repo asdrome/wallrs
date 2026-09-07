@@ -13,11 +13,25 @@
 
 set -euo pipefail
 
-# 1. Locate wallctl binary
+# 1. Ensure Qt/KDE tools can connect to the running Wayland/X11 display session
+if [[ -z "${WAYLAND_DISPLAY:-}" ]]; then
+    for sock in "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"/wayland-*; do
+        if [[ -S "$sock" ]]; then
+            export WAYLAND_DISPLAY="$(basename "$sock")"
+            break
+        fi
+    done
+fi
+
+# 2. Locate wallctl binary
 WALLCTL="${WALLCTL_BIN:-}"
 if [[ -z "$WALLCTL" ]]; then
     if command -v wallctl &>/dev/null; then
         WALLCTL="wallctl"
+    elif [[ -x "/usr/local/bin/wallctl" ]]; then
+        WALLCTL="/usr/local/bin/wallctl"
+    elif [[ -x "/usr/bin/wallctl" ]]; then
+        WALLCTL="/usr/bin/wallctl"
     elif [[ -x "$HOME/.cargo/bin/wallctl" ]]; then
         WALLCTL="$HOME/.cargo/bin/wallctl"
     elif [[ -x "./target/release/wallctl" ]]; then
@@ -25,7 +39,7 @@ if [[ -z "$WALLCTL" ]]; then
     elif [[ -x "./target/debug/wallctl" ]]; then
         WALLCTL="./target/debug/wallctl"
     else
-        echo "Error: wallctl binary not found in PATH, ~/.cargo/bin, or ./target/" >&2
+        echo "Error: wallctl binary not found in PATH, /usr/local/bin, /usr/bin, ~/.cargo/bin, or ./target/" >&2
         exit 1
     fi
 fi
@@ -93,9 +107,20 @@ RGB="$(echo "$COLOR_OUTPUT" | awk '{print $2}')"
 echo "Extracted accent color: $HEX (RGB: $RGB)"
 
 # 4. Apply to KDE Plasma
-# Explicitly persist AccentColor and LastUsedCustomAccentColor in kdeglobals.
-# This ensures that both the System Settings GUI (kcm_colors) and the Plasma
-# panel/dock immediately recognize and select the custom accent color.
+# Step 1: Use official plasma-apply-colorscheme tool to compute the new color palette
+# and apply the accent color across Qt/GTK applications.
+if command -v plasma-apply-colorscheme &>/dev/null; then
+    SCHEME="$(grep -m1 '^ColorScheme=' "$HOME/.config/kdeglobals" 2>/dev/null | cut -d= -f2 || true)"
+    if [[ -z "$SCHEME" ]]; then
+        SCHEME="BreezeDark"
+    fi
+    plasma-apply-colorscheme --accent-color "$HEX" "$SCHEME"
+fi
+
+# Step 2: Persist custom accent color keys in kdeglobals.
+# Running kwriteconfig AFTER plasma-apply-colorscheme ensures that plasmashell's
+# config watcher detects the update only AFTER the new palette has been written to disk,
+# preventing the dock/panel from lagging one step behind.
 KWRITECONFIG=""
 if command -v kwriteconfig6 &>/dev/null; then
     KWRITECONFIG="kwriteconfig6"
@@ -109,15 +134,6 @@ if [[ -n "$KWRITECONFIG" ]]; then
     "$KWRITECONFIG" --file kdeglobals --group General --key accentColorFromWallpaper --type bool false
 fi
 
-# Prefer official plasma-apply-colorscheme tool which applies the accent color
-# cleanly across Qt/KDE/GTK apps without touching or crashing the desktop layer surface.
-if command -v plasma-apply-colorscheme &>/dev/null; then
-    SCHEME="$(grep -m1 '^ColorScheme=' "$HOME/.config/kdeglobals" 2>/dev/null | cut -d= -f2 || true)"
-    if [[ -z "$SCHEME" ]]; then
-        SCHEME="BreezeDark"
-    fi
-    plasma-apply-colorscheme --accent-color "$HEX" "$SCHEME"
-fi
 
 # Reconfigure KWin to sync window decorations and titlebars
 if command -v qdbus6 &>/dev/null; then

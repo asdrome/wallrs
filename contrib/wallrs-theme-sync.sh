@@ -11,7 +11,23 @@
 
 set -euo pipefail
 
-# Locate the contrib scripts directory (adjacent to this script or in /usr/share/wallrs/contrib)
+# 1. Locate wallctl binary
+WALLCTL="${WALLCTL_BIN:-}"
+if [[ -z "$WALLCTL" ]]; then
+    if command -v wallctl &>/dev/null; then
+        WALLCTL="wallctl"
+    elif [[ -x "/usr/local/bin/wallctl" ]]; then
+        WALLCTL="/usr/local/bin/wallctl"
+    elif [[ -x "/usr/bin/wallctl" ]]; then
+        WALLCTL="/usr/bin/wallctl"
+    elif [[ -x "$HOME/.cargo/bin/wallctl" ]]; then
+        WALLCTL="$HOME/.cargo/bin/wallctl"
+    else
+        WALLCTL="wallctl"
+    fi
+fi
+
+# 2. Locate the contrib scripts directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONTRIB_DIR="$SCRIPT_DIR"
 if [[ ! -f "$CONTRIB_DIR/kde-accent-color.sh" ]]; then
@@ -22,7 +38,7 @@ if [[ ! -f "$CONTRIB_DIR/kde-accent-color.sh" ]]; then
     fi
 fi
 
-# 2. Desktop Environment Detection
+# 3. Desktop Environment Detection
 DESKTOP="${XDG_CURRENT_DESKTOP:-${DESKTOP_SESSION:-}}"
 
 case "$DESKTOP" in
@@ -31,25 +47,25 @@ case "$DESKTOP" in
             exec "$CONTRIB_DIR/kde-accent-color.sh" "$@"
         else
             echo "wallrs-theme-sync: kde-accent-color.sh not found in $CONTRIB_DIR" >&2
+            exit 1
         fi
         ;;
     *Hyprland*|*sway*|*wlroots*|*Sway*)
         if command -v matugen &>/dev/null && [[ -x "$CONTRIB_DIR/hyprland-matugen.sh" ]]; then
             exec "$CONTRIB_DIR/hyprland-matugen.sh" "$@"
         elif command -v matugen &>/dev/null; then
-            PREVIEW_PATH="$(wallctl preview "$@")"
+            PREVIEW_PATH="$("$WALLCTL" preview "$@")"
             exec matugen image "$PREVIEW_PATH"
         fi
         ;;
     *)
         # Fallback: check if matugen or pywal are available regardless of compositor
         if command -v matugen &>/dev/null; then
-            PREVIEW_PATH="$(wallctl preview "$@")"
+            PREVIEW_PATH="$("$WALLCTL" preview "$@")"
             exec matugen image "$PREVIEW_PATH"
         elif command -v wal &>/dev/null; then
-            PREVIEW_PATH="$(wallctl preview "$@")"
+            PREVIEW_PATH="$("$WALLCTL" preview "$@")"
             exec wal -i "$PREVIEW_PATH" -n -q
         fi
         ;;
 esac
-
