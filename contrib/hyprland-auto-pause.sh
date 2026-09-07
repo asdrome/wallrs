@@ -2,31 +2,28 @@
 #
 # hyprland-auto-pause.sh - Automatic pause/resume for wallrs on Hyprland
 #
-# Hyprland's tiling model rarely utilizes traditional "maximized" states,
-# and foreign-toplevel state alone may not reflect whether tiled windows
-# cover the active workspace.
+# Note: Fullscreen pausing is already handled natively by wallrsd via the
+# Wayland zwlr_foreign_toplevel_manager_v1 protocol without needing any script.
 #
-# This script listens to Hyprland's IPC socket2 events and pauses wallrs
-# when windows are active on the current workspace, resuming rendering when
-# the workspace is empty (revealing the desktop).
+# This script specifically solves the tiling window scenario:
+# It monitors active workspaces over Hyprland's IPC socket2 event stream.
+# - If an opaque window occupies the active workspace, it calls `wallctl pause`.
+# - If the workspace is empty, or contains ONLY transparent windows (e.g. terminals),
+#   it calls `wallctl resume` so the wallpaper remains visible through blur/transparency.
 #
 # Requirements:
 #   - hyprctl (bundled with Hyprland)
 #   - socat or netcat (nc)
 #   - jq
-#   - wallctl (in PATH or ~/.cargo/bin)
+#   - wallctl (in PATH, ~/.cargo/bin, or target/{debug,release})
 #
 # Usage in hyprland.conf:
-#   exec-once = /path/to/contrib/hyprland-auto-pause.sh
+#   exec-once = /path/to/wallrs/contrib/hyprland-auto-pause.sh
 #
 
 set -euo pipefail
 
-# Locate wallctl binary:
-# 1. Custom $WALLCTL_BIN environment variable
-# 2. System PATH
-# 3. ~/.cargo/bin/wallctl
-# 4. Local workspace target/{release,debug}/wallctl
+# Locate wallctl binary
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WALLCTL_BIN="${WALLCTL_BIN:-}"
 
@@ -54,53 +51,90 @@ SOCKET_PATH="${XDG_RUNTIME_DIR}/hypr/${HYPRLAND_INSTANCE_SIGNATURE:-}/.socket2.s
 
 if [ ! -S "${SOCKET_PATH}" ]; then
     echo "Error: Hyprland socket2 not found at ${SOCKET_PATH}" >&2
+    echo "Is Hyprland running?" >&2
     exit 1
 fi
 
 # Configuration:
-# PAUSE_ON_ANY_WINDOW: 1 = pause when any window is open on workspace
-#                      0 = pause only when a window is fullscreen
-PAUSE_ON_ANY_WINDOW="${PAUSE_ON_ANY_WINDOW:-1}"
+# Regex of window classes treated as transparent (terminals, cava, etc.)
+# If a workspace contains ONLY transparent windows or is empty, the wallpaper remains active.
+TRANSPARENT_CLASSES="${TRANSPARENT_CLASSES:-kitty|Alacritty|foot|wezterm|ghostty}"
+
+# Ignore floating windows (e.g. popups, dialogs, calculators) when deciding to pause
+IGNORE_FLOATING="${IGNORE_FLOATING:-1}"
+
+cleanup() {
+    trap - EXIT INT TERM
+    echo "[wallrs-hypr] Disconnecting from Hyprland IPC..." >&2
+}
+trap cleanup EXIT INT TERM
+
+CURRENT_PAUSED=""
 
 check_and_update() {
     local ws_json
     ws_json="$(hyprctl activeworkspace -j 2>/dev/null || echo '{}')"
-    local window_count
-    window_count="$(echo "${ws_json}" | jq -r '.windows // 0')"
-    local has_fullscreen
-    has_fullscreen="$(echo "${ws_json}" | jq -r '.hasfullscreen // false')"
+    local ws_id
+    ws_id="$(echo "${ws_json}" | jq -r '.id // empty')"
 
-    if [ "${PAUSE_ON_ANY_WINDOW}" = "1" ]; then
-        if [ "${window_count}" -gt 0 ]; then
+    if [ -z "${ws_id}" ]; then
+        return
+    fi
+
+    # Query windows on the active workspace
+    local clients_json
+    clients_json="$(hyprctl clients -j 2>/dev/null || echo '[]')"
+
+    # Count how many non-floating, non-hidden, opaque windows are on this workspace
+    local opaque_count
+    opaque_count="$(echo "${clients_json}" | jq -r \
+        --argjson ws "${ws_id}" \
+        --arg re "${TRANSPARENT_CLASSES}" \
+        --argjson ign_float "${IGNORE_FLOATING}" '
+        [ .[] | select(
+            .workspace.id == $ws and
+            (.hidden // false | not) and
+            (if $ign_float == 1 then (.floating // false | not) else true end) and
+            ((.class // "") | test($re; "i") | not)
+        ) ] | length
+    ' 2>/dev/null || echo "0")"
+
+    if [ "${opaque_count}" -gt 0 ]; then
+        if [ "${CURRENT_PAUSED}" != "true" ]; then
+            CURRENT_PAUSED="true"
+            echo "[wallrs-hypr] Opaque tiled window(s) active on workspace ${ws_id} -> Pausing wallpaper"
             "${WALLCTL_BIN}" pause >/dev/null 2>&1 || true
-        else
-            "${WALLCTL_BIN}" resume >/dev/null 2>&1 || true
         fi
     else
-        if [ "${has_fullscreen}" = "true" ]; then
-            "${WALLCTL_BIN}" pause >/dev/null 2>&1 || true
-        else
+        if [ "${CURRENT_PAUSED}" != "false" ]; then
+            CURRENT_PAUSED="false"
+            echo "[wallrs-hypr] Workspace ${ws_id} clear or transparent window(s) only -> Resuming wallpaper"
             "${WALLCTL_BIN}" resume >/dev/null 2>&1 || true
         fi
     fi
 }
 
+echo "[wallrs-hypr] Connected to Hyprland IPC socket2 (${SOCKET_PATH})"
+echo "[wallrs-hypr] Using wallctl binary: ${WALLCTL_BIN}"
+echo "[wallrs-hypr] Transparent classes: ${TRANSPARENT_CLASSES}"
+echo "[wallrs-hypr] Monitoring workspace state (Opaque tiled windows -> Pause, Empty/Transparent -> Resume)..."
+
 # Run initial check
 check_and_update
 
-# Listen to socket2 events
+# Listen to socket2 events (workspace switches, window open/close/move)
 if command -v socat >/dev/null 2>&1; then
-    socat -u "UNIX-CONNECT:${SOCKET_PATH}" - | while read -r event; do
+    socat -u "UNIX-CONNECT:${SOCKET_PATH}" - 2>/dev/null | while read -r event; do
         case "${event}" in
-            "workspace>>"*|"activewindow>>"*|"openwindow>>"*|"closewindow>>"*|"fullscreen>>"*|"changefloatingmode>>"*)
+            "workspace>>"*|"focusedmon>>"*|"openwindow>>"*|"closewindow>>"*|"movewindow>>"*|"changefloatingmode>>"*)
                 check_and_update
                 ;;
         esac
     done
 elif command -v nc >/dev/null 2>&1; then
-    nc -U "${SOCKET_PATH}" | while read -r event; do
+    nc -U "${SOCKET_PATH}" 2>/dev/null | while read -r event; do
         case "${event}" in
-            "workspace>>"*|"activewindow>>"*|"openwindow>>"*|"closewindow>>"*|"fullscreen>>"*|"changefloatingmode>>"*)
+            "workspace>>"*|"focusedmon>>"*|"openwindow>>"*|"closewindow>>"*|"movewindow>>"*|"changefloatingmode>>"*)
                 check_and_update
                 ;;
         esac
@@ -109,4 +143,3 @@ else
     echo "Error: Neither socat nor netcat (nc) was found. Please install socat." >&2
     exit 1
 fi
-
