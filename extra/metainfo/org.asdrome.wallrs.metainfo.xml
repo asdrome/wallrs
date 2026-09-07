@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="console-application">
+  <id>org.asdrome.wallrs</id>
+  <name>wallrs</name>
+  <summary>Wayland live wallpaper daemon</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <developer id="org.asdrome">
+    <name>Asdrome</name>
+  </developer>
+  <description>
+    <p>
+      High-performance Wayland-native live wallpaper daemon and CLI controller
+      written in pure Rust with wgpu/Vulkan, PipeWire, and libmpv2.
+    </p>
+  </description>
+  <url type="homepage">https://github.com/asdrome/wallrs</url>
+  <url type="bugtracker">https://github.com/asdrome/wallrs/issues</url>
+  <url type="vcs-browser">https://github.com/asdrome/wallrs</url>
+  <content_rating type="oars-1.1" />
+  <provides>
+    <binary>wallrsd</binary>
+    <binary>wallctl</binary>
+  </provides>
+  <categories>
+    <category>Graphics</category>
+    <category>Utility</category>
+  </categories>
+</component>

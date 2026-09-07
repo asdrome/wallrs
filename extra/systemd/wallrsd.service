@@ -1,6 +1,6 @@
 [Unit]
 Description=wallrs live wallpaper daemon
-Documentation=https://github.com/asdromundo/wallrs
+Documentation=https://github.com/asdrome/wallrs
 PartOf=graphical-session.target
 After=graphical-session.target
 

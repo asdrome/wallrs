@@ -79,7 +79,7 @@ sudo apt install cargo rustc libvulkan-dev libpipewire-0.3-dev libmpv-dev libway
 
 ### Prebuilt Packages (GitHub Releases)
 
-Precompiled packages are available on the [Releases](https://github.com/asdromundo/wallrs/releases) page:
+Precompiled packages are available on the [Releases](https://github.com/asdrome/wallrs/releases) page:
 - **Debian / Ubuntu / Kubuntu (`.deb`)**:
   ```bash
   sudo apt install ./wallrs_*.deb
@@ -93,7 +93,7 @@ Precompiled packages are available on the [Releases](https://github.com/asdromun
 ### Building From Source
 
 ```bash
-git clone https://github.com/asdromundo/wallrs.git
+git clone https://github.com/asdrome/wallrs.git
 cd wallrs
 make
 sudo make install

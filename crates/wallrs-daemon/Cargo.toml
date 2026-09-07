@@ -3,6 +3,9 @@ name = "wallrs-daemon"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Wayland live wallpaper daemon"
 
 [[bin]]
@@ -45,6 +48,11 @@ assets = [
     [
         "../../extra/systemd/wallrsd.service",
         "usr/lib/systemd/user/wallrsd.service",
+        "644",
+    ],
+    [
+        "../../extra/metainfo/org.asdrome.wallrs.metainfo.xml",
+        "usr/share/metainfo/org.asdrome.wallrs.metainfo.xml",
         "644",
     ],
     [
