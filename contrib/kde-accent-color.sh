@@ -93,6 +93,22 @@ RGB="$(echo "$COLOR_OUTPUT" | awk '{print $2}')"
 echo "Extracted accent color: $HEX (RGB: $RGB)"
 
 # 4. Apply to KDE Plasma
+# Explicitly persist AccentColor and LastUsedCustomAccentColor in kdeglobals.
+# This ensures that both the System Settings GUI (kcm_colors) and the Plasma
+# panel/dock immediately recognize and select the custom accent color.
+KWRITECONFIG=""
+if command -v kwriteconfig6 &>/dev/null; then
+    KWRITECONFIG="kwriteconfig6"
+elif command -v kwriteconfig5 &>/dev/null; then
+    KWRITECONFIG="kwriteconfig5"
+fi
+
+if [[ -n "$KWRITECONFIG" ]]; then
+    "$KWRITECONFIG" --file kdeglobals --group General --key AccentColor "$RGB"
+    "$KWRITECONFIG" --file kdeglobals --group General --key LastUsedCustomAccentColor "$RGB"
+    "$KWRITECONFIG" --file kdeglobals --group General --key accentColorFromWallpaper --type bool false
+fi
+
 # Prefer official plasma-apply-colorscheme tool which applies the accent color
 # cleanly across Qt/KDE/GTK apps without touching or crashing the desktop layer surface.
 if command -v plasma-apply-colorscheme &>/dev/null; then
@@ -101,23 +117,13 @@ if command -v plasma-apply-colorscheme &>/dev/null; then
         SCHEME="BreezeDark"
     fi
     plasma-apply-colorscheme --accent-color "$HEX" "$SCHEME"
-else
-    # Fallback to direct kwriteconfig + KWin reconfigure
-    KWRITECONFIG=""
-    if command -v kwriteconfig6 &>/dev/null; then
-        KWRITECONFIG="kwriteconfig6"
-    elif command -v kwriteconfig5 &>/dev/null; then
-        KWRITECONFIG="kwriteconfig5"
-    fi
+fi
 
-    if [[ -n "$KWRITECONFIG" ]]; then
-        "$KWRITECONFIG" --file kdeglobals --group General --key AccentColor "$RGB"
-        if command -v qdbus6 &>/dev/null; then
-            qdbus6 org.kde.KWin /KWin org.kde.KWin.reconfigure 2>/dev/null || true
-        elif command -v qdbus &>/dev/null; then
-            qdbus org.kde.KWin /KWin org.kde.KWin.reconfigure 2>/dev/null || true
-        fi
-    fi
+# Reconfigure KWin to sync window decorations and titlebars
+if command -v qdbus6 &>/dev/null; then
+    qdbus6 org.kde.KWin /KWin org.kde.KWin.reconfigure 2>/dev/null || true
+elif command -v qdbus &>/dev/null; then
+    qdbus org.kde.KWin /KWin org.kde.KWin.reconfigure 2>/dev/null || true
 fi
 
 echo "KDE Plasma accent color successfully updated to $HEX!"
