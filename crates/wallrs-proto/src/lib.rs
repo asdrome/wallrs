@@ -122,6 +122,80 @@ pub struct ImageLayerConfig {
     pub pan: Option<PanConfig>,
     #[serde(default)]
     pub oscillation: Option<OscillationConfig>,
+    #[serde(default, deserialize_with = "deserialize_day_night")]
+    pub day_night: Option<DayNightMode>,
+    #[serde(default)]
+    pub tint: Option<[f32; 3]>,
+}
+
+/// Dynamic day/night behavior for an image layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DayNightMode {
+    /// Ambient lighting tint based on time of day (dawn, noon, sunset, night)
+    Tint,
+    /// Layer only visible at night (fades in at dusk, fades out at dawn)
+    Night,
+    /// Layer only visible during the day (fades out at dusk, fades in at dawn)
+    Day,
+}
+
+/// Flexible deserializer for `Option<DayNightMode>` accepting bools or strings.
+pub fn deserialize_day_night<'de, D>(deserializer: D) -> Result<Option<DayNightMode>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct DayNightOptVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for DayNightOptVisitor {
+        type Value = Option<DayNightMode>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a boolean or string (\"tint\", \"night\", \"day\")")
+        }
+
+        fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            if v {
+                Ok(Some(DayNightMode::Tint))
+            } else {
+                Ok(None)
+            }
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            match v.to_ascii_lowercase().as_str() {
+                "tint" => Ok(Some(DayNightMode::Tint)),
+                "night" => Ok(Some(DayNightMode::Night)),
+                "day" => Ok(Some(DayNightMode::Day)),
+                other => Err(serde::de::Error::unknown_variant(
+                    other,
+                    &["tint", "night", "day"],
+                )),
+            }
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_some<D2>(self, deserializer: D2) -> Result<Self::Value, D2::Error>
+        where
+            D2: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(self)
+        }
+    }
+
+    deserializer.deserialize_any(DayNightOptVisitor)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -407,5 +481,39 @@ oscillation = { speed = 1.5, amplitude = 0.02, axis = "y", phase = 0.5 }
         assert_eq!(osc.amplitude, 0.02);
         assert_eq!(osc.axis, "y");
         assert_eq!(osc.phase, Some(0.5));
+    }
+
+    #[test]
+    fn test_wallpaper_manifest_image_with_day_night_and_tint() {
+        let toml_data = r#"
+[wallpaper]
+type = "image"
+name = "day-night-cycle"
+
+[[image.layers]]
+path = "sky.png"
+day_night = true
+tint = [0.95, 0.90, 1.0]
+
+[[image.layers]]
+path = "stars.png"
+day_night = "night"
+
+[[image.layers]]
+path = "birds.png"
+day_night = "day"
+"#;
+
+        let manifest = WallpaperManifest::from_toml_str(toml_data).expect("failed to parse TOML");
+        let img = manifest.image.expect("image config missing");
+        assert_eq!(img.layers.len(), 3);
+
+        assert_eq!(img.layers[0].day_night, Some(DayNightMode::Tint));
+        assert_eq!(img.layers[0].tint, Some([0.95, 0.90, 1.0]));
+
+        assert_eq!(img.layers[1].day_night, Some(DayNightMode::Night));
+        assert_eq!(img.layers[1].tint, None);
+
+        assert_eq!(img.layers[2].day_night, Some(DayNightMode::Day));
     }
 }

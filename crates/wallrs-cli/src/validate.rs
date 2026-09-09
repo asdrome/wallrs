@@ -56,9 +56,18 @@ pub fn validate_wallpaper(path: &Path) -> Result<(), String> {
                         let osc_str = layer.oscillation.as_ref().map_or("none".into(), |o| {
                             format!("speed: {}, amp: {}, axis: {}", o.speed, o.amplitude, o.axis)
                         });
+                        let dn_str = match layer.day_night {
+                            Some(wallrs_proto::DayNightMode::Tint) => "tint",
+                            Some(wallrs_proto::DayNightMode::Night) => "night",
+                            Some(wallrs_proto::DayNightMode::Day) => "day",
+                            None => "none",
+                        };
+                        let tint_str = layer.tint.map_or("none".into(), |t| {
+                            format!("[{:.2}, {:.2}, {:.2}]", t[0], t[1], t[2])
+                        });
                         println!(
-                            "    ✓ Layer {i}: {:?} ({}x{}) [parallax: {}, pan: {}, oscillation: {}]",
-                            layer.path, w, h, parallax_str, pan_str, osc_str
+                            "    ✓ Layer {i}: {:?} ({}x{}) [parallax: {}, pan: {}, osc: {}, day_night: {}, tint: {}]",
+                            layer.path, w, h, parallax_str, pan_str, osc_str, dn_str, tint_str
                         );
                     }
                     Err(e) => {

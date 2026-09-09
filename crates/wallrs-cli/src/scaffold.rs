@@ -19,6 +19,8 @@ const EMBEDDED_VISUALIZER_WGSL: &str =
 const EMBEDDED_LANDSCAPE_TOML: &str =
     include_str!("../../../examples/parallax-landscape/wallpaper.toml");
 const EMBEDDED_LANDSCAPE_BG: &[u8] = include_bytes!("../../../examples/parallax-landscape/bg.png");
+const EMBEDDED_LANDSCAPE_STARS: &[u8] =
+    include_bytes!("../../../examples/parallax-landscape/stars.png");
 const EMBEDDED_LANDSCAPE_CLOUDS: &[u8] =
     include_bytes!("../../../examples/parallax-landscape/clouds.png");
 const EMBEDDED_LANDSCAPE_FG: &[u8] = include_bytes!("../../../examples/parallax-landscape/fg.png");
@@ -206,6 +208,8 @@ fn apply_embedded_fallback(template_name: &str, target_dir: &Path) -> Result<(),
                 .map_err(|e| format!("Failed to write wallpaper.toml: {e}"))?;
             std::fs::write(target_dir.join("bg.png"), EMBEDDED_LANDSCAPE_BG)
                 .map_err(|e| format!("Failed to write bg.png: {e}"))?;
+            std::fs::write(target_dir.join("stars.png"), EMBEDDED_LANDSCAPE_STARS)
+                .map_err(|e| format!("Failed to write stars.png: {e}"))?;
             std::fs::write(target_dir.join("clouds.png"), EMBEDDED_LANDSCAPE_CLOUDS)
                 .map_err(|e| format!("Failed to write clouds.png: {e}"))?;
             std::fs::write(target_dir.join("fg.png"), EMBEDDED_LANDSCAPE_FG)

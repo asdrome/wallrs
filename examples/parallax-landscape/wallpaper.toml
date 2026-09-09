@@ -4,19 +4,28 @@ name = "parallax-landscape"
 author = "Antonio S. Dromundo"
 description = "Multi-layer parallax landscape with continuous drifting clouds and floating motion"
 
-# 1. Distant sky and mountains
+# 1. Distant sky and mountains (ambient day/night color tint)
 [[image.layers]]
 path = "bg.png"
 parallax = 0.10
+day_night = "tint"
 
-# 2. Midground drifting clouds
+# 2. Night sky stars (visible only at night, smooth dawn/dusk transition)
+[[image.layers]]
+path = "stars.png"
+parallax = 0.05
+day_night = "night"
+
+# 3. Midground drifting clouds (continuous pan + ambient lighting)
 [[image.layers]]
 path = "clouds.png"
 parallax = 0.25
 pan = { speed = 0.02, axis = "x" }
+day_night = "tint"
 
-# 3. Foreground terrain with pointer parallax and gentle vertical oscillation
+# 4. Foreground terrain (pointer parallax, gentle vertical oscillation, ambient lighting)
 [[image.layers]]
 path = "fg.png"
 parallax = 0.55
 oscillation = { speed = 0.8, amplitude = 0.008, axis = "y" }
+day_night = "tint"

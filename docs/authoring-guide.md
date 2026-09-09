@@ -113,12 +113,29 @@ parallax = 0.35
 
 #### Layer Configuration Options (`[[image.layers]]`)
 
-| Key           | Type   | Description                                                                                                |
-| :------------ | :----- | :--------------------------------------------------------------------------------------------------------- |
-| `path`        | String | Relative path to image file (PNG, JPEG, WebP).                                                             |
-| `parallax`    | Float  | Pointer tracking displacement intensity (typically 0.1 to 0.7).                                            |
-| `pan`         | Table  | Continuous linear panning: `{ speed = <f32>, axis = "x" \| "y" }`.                                         |
-| `oscillation` | Table  | Sinusoidal periodic oscillation: `{ speed = <f32>, amplitude = <f32>, axis = "x" \| "y", phase = <f32> }`. |
+| Key           | Type          | Description                                                                                                                                     |
+| :------------ | :------------ | :---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `path`        | String        | Relative path to image file (PNG, JPEG, WebP).                                                                                                  |
+| `parallax`    | Float         | Pointer tracking displacement intensity (typically 0.1 to 0.7).                                                                                 |
+| `pan`         | Table         | Continuous linear panning: `{ speed = <f32>, axis = "x" \| "y" }`.                                                                              |
+| `oscillation` | Table         | Sinusoidal periodic oscillation: `{ speed = <f32>, amplitude = <f32>, axis = "x" \| "y", phase = <f32> }`.                                      |
+| `day_night`   | String / Bool | Dynamic lighting mode: `"tint"` (ambient diurnal tint), `"night"` (fades in at night, e.g. stars), `"day"` (day only), or bool (`true` = tint). |
+| `tint`        | Array         | Static base RGB multiplier: `[r, g, b]` (e.g. `[0.9, 0.9, 1.0]`).                                                                               |
+
+#### Dynamic Day/Night Lighting Cycle
+
+Layers configured with `day_night` respond automatically to the host's local clock:
+- **`"tint"`**: Modulates the layer through smooth ambient color grades (golden amber at dawn/sunset, neutral daylight at noon, midnight indigo after dusk).
+- **`"night"`**: Dynamically fades layer opacity based on solar elevation, rendering at 100% opacity at night and 0% during full daylight (ideal for stars, nebulae, city lamps).
+- **`"day"`**: Renders at full opacity during daylight hours and fades out at night.
+
+You can interactively preview or test any hour of the day via CLI / IPC:
+```bash
+wallctl set-property hour 18.5       # Golden hour sunset preview
+wallctl set-property hour 23.0       # Midnight stars preview
+wallctl set-property hour 12.0       # Midday preview
+wallctl set-property hour -1         # Revert back to live host clock
+```
 
 ### 2. Shader Wallpapers (`type = "shader"`)
 

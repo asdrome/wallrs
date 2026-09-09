@@ -33,6 +33,7 @@ image = { version = "0.25", default-features = false, features = [
 ] }
 libmpv2 = "6.0"
 libmpv2-sys = "4.0"
+libc = "0.2"
 naga = { version = "30", features = ["glsl-in", "wgsl-out"] }
 pollster = "0.3"
 raw-window-handle = "0.6"
