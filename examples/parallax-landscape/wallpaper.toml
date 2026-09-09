@@ -1,11 +1,22 @@
 [wallpaper]
 type = "image"
 name = "parallax-landscape"
+author = "Antonio S. Dromundo"
+description = "Multi-layer parallax landscape with continuous drifting clouds and floating motion"
 
+# 1. Distant sky and mountains
 [[image.layers]]
 path = "bg.png"
+parallax = 0.10
 
+# 2. Midground drifting clouds
+[[image.layers]]
+path = "clouds.png"
+parallax = 0.25
+pan = { speed = 0.02, axis = "x" }
+
+# 3. Foreground terrain with pointer parallax and gentle vertical oscillation
 [[image.layers]]
 path = "fg.png"
-parallax = 0.5
-pan = { speed = 0.005, axis = "x" }
+parallax = 0.55
+oscillation = { speed = 0.8, amplitude = 0.008, axis = "y" }

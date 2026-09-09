@@ -120,6 +120,8 @@ pub struct ImageLayerConfig {
     pub parallax: Option<f32>,
     #[serde(default)]
     pub pan: Option<PanConfig>,
+    #[serde(default)]
+    pub oscillation: Option<OscillationConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -131,6 +133,20 @@ pub struct PanConfig {
 
 fn default_pan_axis() -> String {
     "x".into()
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OscillationConfig {
+    pub speed: f32,
+    pub amplitude: f32,
+    #[serde(default = "default_oscillation_axis")]
+    pub axis: String,
+    #[serde(default)]
+    pub phase: Option<f32>,
+}
+
+fn default_oscillation_axis() -> String {
+    "y".into()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -366,5 +382,30 @@ audio = true
         let shader = manifest.shader.expect("shader config missing");
         assert_eq!(shader.entry, PathBuf::from("aurora.wgsl"));
         assert_eq!(shader.audio, Some(true));
+    }
+
+    #[test]
+    fn test_wallpaper_manifest_image_with_oscillation() {
+        let toml_data = r#"
+[wallpaper]
+type = "image"
+name = "floating-island"
+
+[[image.layers]]
+path = "island.png"
+parallax = 0.3
+oscillation = { speed = 1.5, amplitude = 0.02, axis = "y", phase = 0.5 }
+"#;
+
+        let manifest = WallpaperManifest::from_toml_str(toml_data).expect("failed to parse TOML");
+        let img = manifest.image.expect("image config missing");
+        assert_eq!(img.layers.len(), 1);
+        let layer = &img.layers[0];
+        assert_eq!(layer.parallax, Some(0.3));
+        let osc = layer.oscillation.as_ref().expect("oscillation missing");
+        assert_eq!(osc.speed, 1.5);
+        assert_eq!(osc.amplitude, 0.02);
+        assert_eq!(osc.axis, "y");
+        assert_eq!(osc.phase, Some(0.5));
     }
 }

@@ -87,7 +87,7 @@ thumbnail = "thumb.png" # Optional: Relative path to static preview image
 
 ### 1. Image Wallpapers (`type = "image"`)
 
-Composes one or more image layers in depth order. The first layer (`index = 0`) serves as the background. Subsequent layers can configure cursor-driven parallax displacement and continuous linear panning.
+Composes one or more image layers in depth order. The first layer (`index = 0`) serves as the background. Subsequent layers can configure cursor-driven parallax displacement, continuous linear panning, and sinusoidal periodic oscillation (floating/swaying).
 
 ```toml
 [wallpaper]
@@ -102,17 +102,23 @@ path = "fog.png"
 pan = { speed = 0.005, axis = "x" }
 
 [[image.layers]]
+path = "drone.png"
+parallax = 0.25
+oscillation = { speed = 1.2, amplitude = 0.02, axis = "y" }
+
+[[image.layers]]
 path = "buildings.png"
 parallax = 0.35
 ```
 
 #### Layer Configuration Options (`[[image.layers]]`)
 
-| Key        | Type   | Description                                                        |
-| :--------- | :----- | :----------------------------------------------------------------- |
-| `path`     | String | Relative path to image file (PNG, JPEG, WebP).                     |
-| `parallax` | Float  | Pointer tracking displacement intensity (typically 0.1 to 0.7).    |
-| `pan`      | Table  | Continuous linear panning: `{ speed = <f32>, axis = "x" \| "y" }`. |
+| Key           | Type   | Description                                                                                                |
+| :------------ | :----- | :--------------------------------------------------------------------------------------------------------- |
+| `path`        | String | Relative path to image file (PNG, JPEG, WebP).                                                             |
+| `parallax`    | Float  | Pointer tracking displacement intensity (typically 0.1 to 0.7).                                            |
+| `pan`         | Table  | Continuous linear panning: `{ speed = <f32>, axis = "x" \| "y" }`.                                         |
+| `oscillation` | Table  | Sinusoidal periodic oscillation: `{ speed = <f32>, amplitude = <f32>, axis = "x" \| "y", phase = <f32> }`. |
 
 ### 2. Shader Wallpapers (`type = "shader"`)
 

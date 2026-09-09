@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use thiserror::Error;
-use wallrs_proto::{PanConfig, WallpaperManifest};
+use wallrs_proto::{OscillationConfig, PanConfig, WallpaperManifest};
 use wallrs_render::{FrameContext, PropertyValue, RendererError, WallpaperRenderer};
 
 #[derive(Debug, Error)]
@@ -83,6 +83,7 @@ pub struct LayerDef {
     pub image_path: PathBuf,
     pub parallax: Option<f32>,
     pub pan: Option<PanConfig>,
+    pub oscillation: Option<OscillationConfig>,
     pub opacity: f32,
 }
 
@@ -94,12 +95,14 @@ struct LoadedLayer {
     img_height: u32,
     parallax: f32,
     pan: Option<PanConfig>,
-    current_offset: [f32; 2],
+    oscillation: Option<OscillationConfig>,
+    pan_offset: [f32; 2],
+    parallax_offset: [f32; 2],
     target_offset: [f32; 2],
     opacity: f32,
 }
 
-/// Image wallpaper renderer supporting layered parallax and pan loops.
+/// Image wallpaper renderer supporting layered parallax, pan loops, and sinusoidal oscillation.
 pub struct ImageRenderer {
     layer_defs: Vec<LayerDef>,
     raw_memory_layers: Vec<(u32, u32, Vec<u8>)>,
@@ -115,8 +118,15 @@ impl Default for ImageRenderer {
     }
 }
 
-/// In-memory image representation: (width, height, raw_rgba, parallax, pan).
-pub type MemoryLayer = (u32, u32, Vec<u8>, Option<f32>, Option<PanConfig>);
+/// In-memory image representation: (width, height, raw_rgba, parallax, pan, oscillation).
+pub type MemoryLayer = (
+    u32,
+    u32,
+    Vec<u8>,
+    Option<f32>,
+    Option<PanConfig>,
+    Option<OscillationConfig>,
+);
 
 impl ImageRenderer {
     pub fn new() -> Self {
@@ -165,6 +175,7 @@ impl ImageRenderer {
                     image_path: full_path,
                     parallax: l.parallax,
                     pan: l.pan.clone(),
+                    oscillation: l.oscillation.clone(),
                     opacity: 1.0,
                 }
             })
@@ -178,11 +189,12 @@ impl ImageRenderer {
         let mut defs = Vec::new();
         let mut raw = Vec::new();
 
-        for (w, h, bytes, parallax, pan) in memory_layers {
+        for (w, h, bytes, parallax, pan, oscillation) in memory_layers {
             defs.push(LayerDef {
                 image_path: PathBuf::new(),
                 parallax,
                 pan,
+                oscillation,
                 opacity: 1.0,
             });
             raw.push((w, h, bytes));
@@ -381,7 +393,9 @@ impl WallpaperRenderer for ImageRenderer {
                 img_height: img_h,
                 parallax: def.parallax.unwrap_or(0.0),
                 pan: def.pan.clone(),
-                current_offset: [0.0, 0.0],
+                oscillation: def.oscillation.clone(),
+                pan_offset: [0.0, 0.0],
+                parallax_offset: [0.0, 0.0],
                 target_offset: [0.0, 0.0],
                 opacity: def.opacity,
             });
@@ -401,27 +415,27 @@ impl WallpaperRenderer for ImageRenderer {
         let pointer = ctx.pointer.unwrap_or((0.0, 0.0));
 
         for layer in &mut self.loaded_layers {
-            // 1. Continuous Pan Animation
+            // 1. Continuous Pan Animation (independent accumulation)
             if let Some(pan) = &layer.pan {
                 let shift = pan.speed * dt;
                 if pan.axis.eq_ignore_ascii_case("y") {
-                    layer.current_offset[1] = (layer.current_offset[1] + shift) % 1.0;
+                    layer.pan_offset[1] = (layer.pan_offset[1] + shift) % 1.0;
                 } else {
-                    layer.current_offset[0] = (layer.current_offset[0] + shift) % 1.0;
+                    layer.pan_offset[0] = (layer.pan_offset[0] + shift) % 1.0;
                 }
             }
 
-            // 2. Interactive Parallax via Pointer Position
+            // 2. Interactive Parallax via Pointer Position (independent smoothing)
             if layer.parallax.abs() > 1e-4 {
                 let target_x = -pointer.0 * layer.parallax * 0.04;
                 let target_y = pointer.1 * layer.parallax * 0.04;
                 layer.target_offset = [target_x, target_y];
 
                 let lerp = (dt * 8.0).min(1.0);
-                layer.current_offset[0] +=
-                    (layer.target_offset[0] - layer.current_offset[0]) * lerp;
-                layer.current_offset[1] +=
-                    (layer.target_offset[1] - layer.current_offset[1]) * lerp;
+                layer.parallax_offset[0] +=
+                    (layer.target_offset[0] - layer.parallax_offset[0]) * lerp;
+                layer.parallax_offset[1] +=
+                    (layer.target_offset[1] - layer.parallax_offset[1]) * lerp;
             }
 
             // 3. Aspect Ratio Cover Fit
@@ -438,16 +452,32 @@ impl WallpaperRenderer for ImageRenderer {
                     scale[1] = 1.0;
                 }
 
-                // Add margin for parallax motion so edges stay hidden
-                if layer.parallax.abs() > 1e-4 {
+                // Add margin for parallax or oscillation motion so edges stay hidden
+                let has_motion = layer.parallax.abs() > 1e-4 || layer.oscillation.is_some();
+                if has_motion {
                     let margin = 0.90;
                     scale[0] *= margin;
                     scale[1] *= margin;
                 }
             }
 
-            // 4. Update GPU uniform buffer
-            let raw = uniform_bytes(layer.current_offset, scale, layer.opacity);
+            // 4. Compute final offset (pan + parallax + periodic oscillation)
+            let mut final_offset = [
+                layer.pan_offset[0] + layer.parallax_offset[0],
+                layer.pan_offset[1] + layer.parallax_offset[1],
+            ];
+            if let Some(osc) = &layer.oscillation {
+                let phase = osc.phase.unwrap_or(0.0);
+                let wave = (ctx.elapsed.as_secs_f32() * osc.speed + phase).sin() * osc.amplitude;
+                if osc.axis.eq_ignore_ascii_case("x") {
+                    final_offset[0] += wave;
+                } else {
+                    final_offset[1] += wave;
+                }
+            }
+
+            // 5. Update GPU uniform buffer
+            let raw = uniform_bytes(final_offset, scale, layer.opacity);
             ctx.queue.write_buffer(&layer.uniform_buffer, 0, &raw);
         }
     }
@@ -506,11 +536,11 @@ impl WallpaperRenderer for ImageRenderer {
         if !self.loaded_layers.is_empty() {
             self.loaded_layers
                 .iter()
-                .any(|l| l.pan.is_some() || l.parallax.abs() > 1e-4)
+                .any(|l| l.pan.is_some() || l.oscillation.is_some() || l.parallax.abs() > 1e-4)
         } else {
-            self.layer_defs
-                .iter()
-                .any(|l| l.pan.is_some() || l.parallax.unwrap_or(0.0).abs() > 1e-4)
+            self.layer_defs.iter().any(|l| {
+                l.pan.is_some() || l.oscillation.is_some() || l.parallax.unwrap_or(0.0).abs() > 1e-4
+            })
         }
     }
 
@@ -550,12 +580,13 @@ mod tests {
             ],
             None,
             None,
+            None,
         );
         let renderer_static = ImageRenderer::from_memory_layers(vec![layer_static.clone()]);
         assert!(!renderer_static.is_animated());
         assert!(!renderer_static.wants_pointer());
 
-        // Create 2 2x2 RGBA layers where layer2 has pan and parallax
+        // Create layer with pan and parallax
         let layer1 = layer_static;
         let layer2 = (
             2,
@@ -568,12 +599,34 @@ mod tests {
                 speed: 0.01,
                 axis: "x".into(),
             }),
+            None,
         );
 
-        let renderer = ImageRenderer::from_memory_layers(vec![layer1, layer2]);
+        let renderer = ImageRenderer::from_memory_layers(vec![layer1.clone(), layer2]);
         assert_eq!(renderer.layer_count(), 2);
         assert!(renderer.is_animated());
         assert!(renderer.wants_pointer());
+
+        // Create layer with oscillation
+        let layer3 = (
+            2,
+            2,
+            vec![
+                0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255,
+            ],
+            None,
+            None,
+            Some(OscillationConfig {
+                speed: 1.5,
+                amplitude: 0.03,
+                axis: "y".into(),
+                phase: Some(0.0),
+            }),
+        );
+        let renderer_osc = ImageRenderer::from_memory_layers(vec![layer1, layer3]);
+        assert_eq!(renderer_osc.layer_count(), 2);
+        assert!(renderer_osc.is_animated());
+        assert!(!renderer_osc.wants_pointer());
     }
 
     #[test]
@@ -603,9 +656,10 @@ mod tests {
             let base_dir = manifest_path.parent().unwrap();
             let renderer = ImageRenderer::from_manifest(&manifest, base_dir)
                 .expect("failed to build ImageRenderer");
-            assert_eq!(renderer.layer_count(), 2);
+            assert_eq!(renderer.layer_count(), 3);
             assert!(renderer.layer_defs[0].image_path.exists());
             assert!(renderer.layer_defs[1].image_path.exists());
+            assert!(renderer.layer_defs[2].image_path.exists());
         }
     }
 }

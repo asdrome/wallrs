@@ -53,9 +53,12 @@ pub fn validate_wallpaper(path: &Path) -> Result<(), String> {
                         let pan_str = layer.pan.as_ref().map_or("none".into(), |p| {
                             format!("speed: {}, axis: {}", p.speed, p.axis)
                         });
+                        let osc_str = layer.oscillation.as_ref().map_or("none".into(), |o| {
+                            format!("speed: {}, amp: {}, axis: {}", o.speed, o.amplitude, o.axis)
+                        });
                         println!(
-                            "    ✓ Layer {i}: {:?} ({}x{}) [parallax: {}, pan: {}]",
-                            layer.path, w, h, parallax_str, pan_str
+                            "    ✓ Layer {i}: {:?} ({}x{}) [parallax: {}, pan: {}, oscillation: {}]",
+                            layer.path, w, h, parallax_str, pan_str, osc_str
                         );
                     }
                     Err(e) => {
