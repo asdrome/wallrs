@@ -11,6 +11,11 @@ const EMBEDDED_PLASMA_TOML: &str =
     include_str!("../../../examples/shadertoy-plasma/wallpaper.toml");
 const EMBEDDED_PLASMA_GLSL: &str = include_str!("../../../examples/shadertoy-plasma/plasma.glsl");
 
+const EMBEDDED_VISUALIZER_TOML: &str =
+    include_str!("../../../examples/audio-visualizer/wallpaper.toml");
+const EMBEDDED_VISUALIZER_WGSL: &str =
+    include_str!("../../../examples/audio-visualizer/visualizer.wgsl");
+
 const EMBEDDED_LANDSCAPE_TOML: &str =
     include_str!("../../../examples/parallax-landscape/wallpaper.toml");
 const EMBEDDED_LANDSCAPE_BG: &[u8] = include_bytes!("../../../examples/parallax-landscape/bg.png");
@@ -188,6 +193,12 @@ fn apply_embedded_fallback(template_name: &str, target_dir: &Path) -> Result<(),
             std::fs::write(target_dir.join("plasma.glsl"), EMBEDDED_PLASMA_GLSL)
                 .map_err(|e| format!("Failed to write plasma.glsl: {e}"))?;
         }
+        "audio-visualizer" => {
+            std::fs::write(target_dir.join("wallpaper.toml"), EMBEDDED_VISUALIZER_TOML)
+                .map_err(|e| format!("Failed to write wallpaper.toml: {e}"))?;
+            std::fs::write(target_dir.join("visualizer.wgsl"), EMBEDDED_VISUALIZER_WGSL)
+                .map_err(|e| format!("Failed to write visualizer.wgsl: {e}"))?;
+        }
         "parallax-landscape" => {
             std::fs::write(target_dir.join("wallpaper.toml"), EMBEDDED_LANDSCAPE_TOML)
                 .map_err(|e| format!("Failed to write wallpaper.toml: {e}"))?;
@@ -347,6 +358,8 @@ pub fn handle_new_wallpaper(args: NewWallpaperArgs) -> Result<(), String> {
                 e
             } else if template_name == "shadertoy-plasma" {
                 "plasma.glsl".into()
+            } else if template_name == "audio-visualizer" {
+                "visualizer.wgsl".into()
             } else {
                 "aurora.wgsl".into()
             };
@@ -455,6 +468,45 @@ mod tests {
         handle_new_wallpaper(args).expect("Failed to scaffold shader wallpaper");
 
         let wall_dir = temp_dir.join("test-shader-wall");
+        assert!(wall_dir.join("wallpaper.toml").exists());
+        assert!(wall_dir.join("visualizer.wgsl").exists());
+
+        validate_wallpaper(&wall_dir).expect("Validation should pass");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_scaffold_default_aurora_shader() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "wallrs_test_scaffold_aurora_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        let args = NewWallpaperArgs {
+            name: "test-aurora-wall".into(),
+            r#type: Some("shader".into()),
+            template: None,
+            dir: Some(temp_dir.clone()),
+            local: false,
+            author: Some("Tester".into()),
+            description: Some("Test aurora shader".into()),
+            force: true,
+            shader: None,
+            audio: false,
+            glsl: false,
+            layers: Vec::new(),
+            parallax: None,
+            video: None,
+            volume: None,
+            no_loop: false,
+            audio_track: None,
+            audio_volume: None,
+        };
+
+        handle_new_wallpaper(args).expect("Failed to scaffold default aurora shader");
+
+        let wall_dir = temp_dir.join("test-aurora-wall");
         assert!(wall_dir.join("wallpaper.toml").exists());
         assert!(wall_dir.join("aurora.wgsl").exists());
 

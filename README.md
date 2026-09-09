@@ -174,11 +174,11 @@ Options:
 wallctl list
 
 # Apply a wallpaper from a folder or manifest (audio starts muted by default)
-wallctl set-wallpaper examples/parallax-with-audio
-wallctl set-wallpaper examples/video-sunset --output eDP-1
+wallctl set-wallpaper examples/video-wallpaper
+wallctl set-wallpaper examples/parallax-landscape --output eDP-1
 
 # Apply a wallpaper and unmute audio immediately
-wallctl set-wallpaper examples/video-sunset --unmute
+wallctl set-wallpaper examples/video-wallpaper --unmute
 
 # Audio controls
 wallctl mute

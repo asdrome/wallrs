@@ -67,6 +67,24 @@ pub trait WallpaperRenderer: Send {
         true
     }
 
+    /// Returns the suggested target FPS for this renderer, if any.
+    ///
+    /// For example, video wallpapers can report their container or estimated video framerate (e.g. 24.0, 30.0, 60.0),
+    /// preventing redundant render passes and GPU swapchain presentations on high refresh rate displays (144Hz, 240Hz).
+    /// Defaults to `None` (rendering at display refresh rate or global max_fps ceiling).
+    fn target_fps(&self) -> Option<f64> {
+        None
+    }
+
+    /// Returns whether the renderer has new visual content that requires presenting a new frame.
+    ///
+    /// When `false`, the display engine can skip swapchain acquisition, command buffer submission,
+    /// and presentation for the current frame callback, saving GPU and CPU cycles.
+    /// Defaults to `true` (e.g., continuous procedural shaders or animated layers).
+    fn is_dirty(&self) -> bool {
+        true
+    }
+
     /// Tears down any allocated resources.
     fn teardown(&mut self) {}
 }

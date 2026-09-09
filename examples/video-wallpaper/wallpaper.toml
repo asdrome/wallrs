@@ -1,8 +1,10 @@
 [wallpaper]
 type = "video"
-name = "sample-video"
+name = "video-wallpaper"
+author = "wallrs"
+description = "Looping video wallpaper with audio support (unmute with --unmute)"
 
 [video]
 path = "sample.mp4"
-volume = 0.0
+volume = 50.0
 loop = true

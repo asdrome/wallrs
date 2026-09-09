@@ -5,6 +5,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 use wallrs_proto::{Command, OutputInfoProto, OutputSelector, PropertyValue, Response};
+use wallrs_render::WallpaperRenderer;
 
 use crate::engine::EngineState;
 
@@ -697,7 +698,7 @@ pub fn apply_wallpaper(
 
                 if matches {
                     matched = true;
-                    let renderer = match wallrs_content_video::VideoRenderer::from_manifest(
+                    let mut renderer = match wallrs_content_video::VideoRenderer::from_manifest(
                         &manifest, base_dir,
                     ) {
                         Ok(r) => Box::new(r),
@@ -707,19 +708,21 @@ pub fn apply_wallpaper(
                         }
                     };
 
+                    if state.allow_audio {
+                        let _ =
+                            renderer.set_property("mute", wallrs_proto::PropertyValue::Bool(false));
+                        out.audio_muted = false;
+                    } else {
+                        let _ =
+                            renderer.set_property("mute", wallrs_proto::PropertyValue::Bool(true));
+                        out.audio_muted = true;
+                    }
+
                     if let Err(e) = out.set_renderer(renderer, &gpu, &state.qh) {
                         error = Some(e.to_string());
                         break;
                     }
                     out.current_wallpaper = Some(manifest_path.to_path_buf());
-                    if !state.allow_audio {
-                        if let Some(r) = &mut out.renderer {
-                            let _ = r.set_property("mute", wallrs_proto::PropertyValue::Bool(true));
-                        }
-                        out.audio_muted = true;
-                    } else {
-                        out.audio_muted = false;
-                    }
                     out.audio_track = None;
                     out.audio_handle = None;
                 }
