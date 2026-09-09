@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2026-09-08
+
+### Added
+- **Native Wallpaper Scaffolding**: Added `wallctl new` (with alias `wallctl init`) to bootstrap custom wallpapers conforming to XDG Base Directory conventions and decoupled Single Responsibility Principle modules.
+- **Formal Technical Authoring Guide**: Authored comprehensive documentation in `docs/authoring-guide.md` defining `wallpaper.toml` schemas, external tooling guidelines, and the exact 192-byte `ShaderUniforms` GPU memory layout.
+- **Renderer Framerate Ceiling (`target_fps`)**: Added `target_fps(&self) -> Option<f64>` to `WallpaperRenderer` allowing procedural renderers or user constraints (`--max-fps`) to enforce framerate limits.
+- **Dirty Frame Guard (`is_dirty`)**: Added `is_dirty(&self) -> bool` to `WallpaperRenderer` and skipped surface texture acquisition, render passes, and swapchain presentations in `OutputSurface` when the video decoder has not produced a new frame, delegating presentation timing and pulldown cadence directly to `libmpv`.
+
+### Performance
+- **Native Video Resolution Rendering**: Render size is matched to native video dimensions up to screen resolution, delegating presentation scaling to GPU hardware bilinear filtering and eliminating CPU software upscaling to 4K on high-DPI displays (up to 75% memory bandwidth reduction).
+- **Idle Video Suspension (0.0% CPU on Pause/EOF)**: Implemented dynamic `is_animated()` lifecycle tracking for `VideoRenderer` to suspend Wayland frame callbacks on pause or non-looping EOF.
+
+### Fixed
+- **Audio Leak on Initial Video Load**: Fixed a race condition where videos with audio would briefly play sound upon loading before being muted by the daemon. MPV is now initialized in a strictly muted state with `ao = "null"`, only enabling audio threads when unmuted explicitly or by policy.
+
+### Removed
+- **Redundant Example Packages**: Removed `examples/video-with-sound` and `examples/parallax-with-audio`, consolidating `examples/video-wallpaper` (with volume configurable and muted by default) and `examples/parallax-landscape` to reduce repository and package weight.
+
 ## [1.1.1] - 2026-09-07
 
 ### Fixed

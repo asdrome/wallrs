@@ -1739,7 +1739,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "wallrs-audio"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "arc-swap",
  "libmpv2",
@@ -1751,7 +1751,7 @@ dependencies = [
 
 [[package]]
 name = "wallrs-cli"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "clap",
  "image",
@@ -1764,7 +1764,7 @@ dependencies = [
 
 [[package]]
 name = "wallrs-content-image"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "image",
  "thiserror",
@@ -1776,7 +1776,7 @@ dependencies = [
 
 [[package]]
 name = "wallrs-content-shader"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "naga",
  "thiserror",
@@ -1789,7 +1789,7 @@ dependencies = [
 
 [[package]]
 name = "wallrs-content-video"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "libmpv2",
  "libmpv2-sys",
@@ -1802,7 +1802,7 @@ dependencies = [
 
 [[package]]
 name = "wallrs-core"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "calloop",
  "image",
@@ -1826,7 +1826,7 @@ dependencies = [
 
 [[package]]
 name = "wallrs-daemon"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "clap",
  "tracing",
@@ -1841,7 +1841,7 @@ dependencies = [
 
 [[package]]
 name = "wallrs-proto"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -1851,7 +1851,7 @@ dependencies = [
 
 [[package]]
 name = "wallrs-render"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "thiserror",
  "wallrs-proto",

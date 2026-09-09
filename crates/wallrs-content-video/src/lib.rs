@@ -622,7 +622,10 @@ impl WallpaperRenderer for VideoRenderer {
     }
 
     fn target_fps(&self) -> Option<f64> {
-        self.cached_fps
+        // Pacing and cadence (including 3:2 pulldown) are managed natively by libmpv's PTS clock.
+        // mpv_render_context_update signals MPV_RENDER_UPDATE_FRAME, setting is_dirty to gate swapchain draws.
+        // Returning None avoids artificial fixed-interval quantization against display vblanks.
+        None
     }
 
     fn is_dirty(&self) -> bool {
@@ -811,8 +814,9 @@ mod tests {
         assert!(renderer.is_animated());
         assert!(renderer.is_dirty());
 
-        // Test cached_fps simulation
+        // Test cached_fps simulation and target_fps delegation
         renderer.cached_fps = Some(30.0);
-        assert_eq!(renderer.target_fps(), Some(30.0));
+        assert_eq!(renderer.cached_fps, Some(30.0));
+        assert!(renderer.target_fps().is_none());
     }
 }
