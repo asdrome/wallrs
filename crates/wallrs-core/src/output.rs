@@ -350,10 +350,10 @@ impl OutputSurface {
         if self.configured {
             self.render_frame(gpu.device, gpu.queue, qh);
         }
-        if self.is_paused() {
-            if let Some(r) = &mut self.renderer {
-                let _ = r.set_property("pause", wallrs_proto::PropertyValue::Bool(true));
-            }
+        if self.is_paused()
+            && let Some(r) = &mut self.renderer
+        {
+            let _ = r.set_property("pause", wallrs_proto::PropertyValue::Bool(true));
         }
         Ok(())
     }

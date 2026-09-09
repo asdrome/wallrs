@@ -100,6 +100,10 @@ pub struct WallpaperMeta {
     pub r#type: String, // "image", "shader", "video"
     pub name: String,
     #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
     pub thumbnail: Option<PathBuf>,
 }
 
@@ -132,6 +136,8 @@ fn default_pan_axis() -> String {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ShaderConfig {
     pub entry: PathBuf,
+    #[serde(default)]
+    pub audio: Option<bool>,
     #[serde(default)]
     pub uniforms: std::collections::HashMap<String, f32>,
 }
@@ -334,5 +340,31 @@ entry = "main.wgsl"
             manifest.wallpaper.thumbnail,
             Some(PathBuf::from("thumb.png"))
         );
+    }
+
+    #[test]
+    fn test_wallpaper_manifest_with_author_and_shader_audio() {
+        let toml_data = r#"
+[wallpaper]
+type = "shader"
+name = "aurora-live"
+author = "Developer"
+description = "A dynamic aurora shader"
+
+[shader]
+entry = "aurora.wgsl"
+audio = true
+"#;
+
+        let manifest = WallpaperManifest::from_toml_str(toml_data).expect("failed to parse TOML");
+        assert_eq!(manifest.wallpaper.name, "aurora-live");
+        assert_eq!(manifest.wallpaper.author, Some("Developer".into()));
+        assert_eq!(
+            manifest.wallpaper.description,
+            Some("A dynamic aurora shader".into())
+        );
+        let shader = manifest.shader.expect("shader config missing");
+        assert_eq!(shader.entry, PathBuf::from("aurora.wgsl"));
+        assert_eq!(shader.audio, Some(true));
     }
 }

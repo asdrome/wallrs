@@ -201,6 +201,10 @@ wallctl set-property speed 1.5 --output eDP-1
 # Direct GPU screenshot
 wallctl screenshot eDP-1 ~/Pictures/wallpaper_snap.png
 
+# Scaffold a new wallpaper skeleton (interactive or with flags)
+wallctl new my-shader --type shader --audio
+wallctl new my-scene --type image
+
 # Lint and validate a wallpaper before loading
 wallctl validate examples/aurora-shader
 

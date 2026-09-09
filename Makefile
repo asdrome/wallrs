@@ -86,6 +86,8 @@ install:
 	chmod 644 $(DESTDIR)$(SYSTEMD_USER_DIR)/wallrs-auto-pause.service
 	install -d $(DESTDIR)$(SHAREDIR)/contrib
 	install -m 755 contrib/*.sh $(DESTDIR)$(SHAREDIR)/contrib/
+	install -d $(DESTDIR)$(SHAREDIR)/examples
+	cp -r examples/* $(DESTDIR)$(SHAREDIR)/examples/
 	install -d $(DESTDIR)$(DOCDIR)
 	install -m 644 README.md $(DESTDIR)$(DOCDIR)/README.md
 	install -d $(DESTDIR)$(LICDIR)

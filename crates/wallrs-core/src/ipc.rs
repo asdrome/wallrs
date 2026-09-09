@@ -443,12 +443,12 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                         target_format,
                         wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
                     ) {
-                        for pixel in unpadded_bytes.chunks_exact_mut(4) {
+                        for pixel in unpadded_bytes.as_chunks_mut::<4>().0 {
                             pixel.swap(0, 2);
                         }
                     } else if matches!(target_format, wgpu::TextureFormat::Rgb10a2Unorm) {
                         let mut rgba8 = Vec::with_capacity((width * height * 4) as usize);
-                        for chunk in unpadded_bytes.chunks_exact(4) {
+                        for chunk in unpadded_bytes.as_chunks::<4>().0 {
                             let packed =
                                 u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
                             let r = ((packed & 0x3FF) >> 2) as u8;
@@ -788,7 +788,7 @@ mod tests {
     fn test_screenshot_bgra_channel_swap() {
         // Simulated BGRA buffer: Blue=200, Green=100, Red=50, Alpha=255
         let mut buffer = vec![200u8, 100, 50, 255, 10, 20, 30, 255];
-        for pixel in buffer.chunks_exact_mut(4) {
+        for pixel in buffer.as_chunks_mut::<4>().0 {
             pixel.swap(0, 2);
         }
         // After swap: Red=50, Green=100, Blue=200, Alpha=255
