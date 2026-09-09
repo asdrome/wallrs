@@ -38,6 +38,10 @@ struct Args {
     #[arg(long)]
     state_file: Option<std::path::PathBuf>,
 
+    /// Wayland layer-shell surface layer: auto (default, bottom on KDE, background on others), background, or bottom
+    #[arg(short = 'l', long, default_value = "auto")]
+    layer: String,
+
     /// Legacy flag retained for backward compatibility (pause on maximized is now default)
     #[arg(long, hide = true)]
     pause_on_maximized: bool,
@@ -106,12 +110,23 @@ fn main() {
 
     let pause_on_maximized = !args.no_pause_on_maximized;
 
+    let layer = match args.layer.to_lowercase().as_str() {
+        "auto" => wallrs_core::ShellLayer::Auto,
+        "background" | "bg" => wallrs_core::ShellLayer::Background,
+        "bottom" | "b" => wallrs_core::ShellLayer::Bottom,
+        other => {
+            tracing::error!("Invalid layer '{other}'. Expected 'auto', 'background', or 'bottom'");
+            std::process::exit(1);
+        }
+    };
+
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
         color = ?initial_color,
         fps = ?args.fps,
         fullscreen_pause = !args.no_fullscreen_pause,
         pause_on_maximized,
+        layer = ?layer,
         "Initializing wallrsd live wallpaper daemon"
     );
 
@@ -123,6 +138,7 @@ fn main() {
         allow_audio: args.allow_audio,
         restore_state: !args.no_restore,
         state_path: args.state_file,
+        layer,
     };
 
     let mut engine = match Engine::with_config(
@@ -193,15 +209,19 @@ mod tests {
         assert!(args.no_pause_on_maximized);
         assert!(!args.no_restore);
         assert!(args.state_file.is_none());
+        assert_eq!(args.layer, "auto");
 
         let args2 = Args::try_parse_from([
             "wallrsd",
             "--no-restore",
             "--state-file",
             "/tmp/custom_state.json",
+            "--layer",
+            "bottom",
         ])
         .unwrap();
         assert!(args2.no_restore);
+        assert_eq!(args2.layer, "bottom");
         assert_eq!(
             args2.state_file,
             Some(std::path::PathBuf::from("/tmp/custom_state.json"))

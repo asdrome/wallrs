@@ -94,6 +94,7 @@ pub struct EngineState {
     pub cursor_shape_devices: Vec<WpCursorShapeDeviceV1>,
     pub compositor_state: CompositorState,
     pub layer_shell: LayerShell,
+    pub layer: Layer,
     pub wgpu_instance: wgpu::Instance,
     pub wgpu_adapter: wgpu::Adapter,
     pub wgpu_device: wgpu::Device,
@@ -182,7 +183,7 @@ impl OutputHandler for EngineState {
         let layer_surface = self.layer_shell.create_layer_surface(
             qh,
             surface,
-            Layer::Background,
+            self.layer,
             Some("desktop"),
             Some(&output),
         );
@@ -847,6 +848,9 @@ impl Engine {
             crate::state::StateSnapshot::default()
         };
 
+        let layer = config.layer.resolve();
+        tracing::info!(layer = ?layer, "Using Wayland layer-shell surface layer");
+
         tracing::info!("Connecting to Wayland display");
         let conn = Connection::connect_to_env()
             .map_err(|e| EngineError::WaylandConnection(e.to_string()))?;
@@ -960,6 +964,7 @@ impl Engine {
             cursor_shape_devices,
             compositor_state,
             layer_shell,
+            layer,
             wgpu_instance,
             wgpu_adapter,
             wgpu_device,
