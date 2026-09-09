@@ -1,3 +1,7 @@
+use smithay_client_toolkit::reexports::protocols::wp::cursor_shape::v1::client::{
+    wp_cursor_shape_device_v1::{Shape, WpCursorShapeDeviceV1},
+    wp_cursor_shape_manager_v1::WpCursorShapeManagerV1,
+};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_dispatch2, delegate_registry,
@@ -25,8 +29,9 @@ use wallrs_proto::{OutputSelector, PropertyValue, Response};
 use wayland_client::{
     Connection, Dispatch, Proxy, QueueHandle,
     backend::ObjectId,
+    delegate_noop,
     globals::registry_queue_init,
-    protocol::{wl_output, wl_pointer, wl_seat, wl_surface},
+    protocol::{wl_output, wl_pointer, wl_region, wl_seat, wl_surface},
 };
 use wayland_protocols_wlr::foreign_toplevel::v1::client::{
     zwlr_foreign_toplevel_handle_v1::{self, ZwlrForeignToplevelHandleV1},
@@ -85,6 +90,8 @@ pub struct EngineState {
     pub output_state: OutputState,
     pub seat_state: SeatState,
     pub pointers: Vec<wl_pointer::WlPointer>,
+    pub cursor_shape_mgr: Option<WpCursorShapeManagerV1>,
+    pub cursor_shape_devices: Vec<WpCursorShapeDeviceV1>,
     pub compositor_state: CompositorState,
     pub layer_shell: LayerShell,
     pub wgpu_instance: wgpu::Instance,
@@ -184,6 +191,12 @@ impl OutputHandler for EngineState {
         layer_surface.set_exclusive_zone(-1);
         layer_surface.set_keyboard_interactivity(KeyboardInteractivity::None);
         layer_surface.set_size(0, 0);
+
+        // Apply an empty input region by default so desktop clicks and events pass through
+        let region = self.compositor_state.wl_compositor().create_region(qh, ());
+        layer_surface.wl_surface().set_input_region(Some(&region));
+        region.destroy();
+
         layer_surface.commit();
 
         let surface_id = layer_surface.wl_surface().id();
@@ -272,9 +285,14 @@ impl LayerShellHandler for EngineState {
                 device: &self.wgpu_device,
                 queue: &self.wgpu_queue,
             };
-            if let Err(e) =
-                output.handle_configure(configure.new_size, &gpu, conn, qh, &*self.renderer_factory)
-            {
+            if let Err(e) = output.handle_configure(
+                configure.new_size,
+                &gpu,
+                conn,
+                qh,
+                &*self.renderer_factory,
+                self.compositor_state.wl_compositor(),
+            ) {
                 tracing::error!(output = ?output.name, error = ?e, "Failed configuring output surface");
             }
         }
@@ -299,6 +317,10 @@ impl SeatHandler for EngineState {
 
     fn new_seat(&mut self, _conn: &Connection, qh: &QueueHandle<Self>, seat: wl_seat::WlSeat) {
         if let Ok(pointer) = self.seat_state.get_pointer(qh, &seat) {
+            if let Some(mgr) = &self.cursor_shape_mgr {
+                self.cursor_shape_devices
+                    .push(mgr.get_pointer(&pointer, qh, ()));
+            }
             self.pointers.push(pointer);
         }
     }
@@ -313,6 +335,10 @@ impl SeatHandler for EngineState {
         if capability == Capability::Pointer
             && let Ok(pointer) = self.seat_state.get_pointer(qh, &seat)
         {
+            if let Some(mgr) = &self.cursor_shape_mgr {
+                self.cursor_shape_devices
+                    .push(mgr.get_pointer(&pointer, qh, ()));
+            }
             self.pointers.push(pointer);
         }
     }
@@ -339,6 +365,11 @@ impl PointerHandler for EngineState {
         events: &[PointerEvent],
     ) {
         for event in events {
+            if let PointerEventKind::Enter { serial } = event.kind {
+                for shape_device in &self.cursor_shape_devices {
+                    shape_device.set_shape(serial, Shape::Default);
+                }
+            }
             if let PointerEventKind::Motion { .. } | PointerEventKind::Enter { .. } = event.kind {
                 let surface_id = event.surface.id();
                 if let Some(out) = self.outputs.get_mut(&surface_id)
@@ -370,6 +401,9 @@ impl ProvidesRegistryState for EngineState {
 
 delegate_registry!(EngineState);
 delegate_dispatch2!(EngineState);
+delegate_noop!(EngineState: ignore wl_region::WlRegion);
+delegate_noop!(EngineState: ignore WpCursorShapeManagerV1);
+delegate_noop!(EngineState: ignore WpCursorShapeDeviceV1);
 
 impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for EngineState {
     fn event(
@@ -742,7 +776,12 @@ impl EngineState {
                         queue: &self.wgpu_queue,
                     };
                     let solid = Box::new(wallrs_render::SolidColorRenderer::new(color));
-                    let _ = out.set_renderer(solid, &gpu, &self.qh);
+                    let _ = out.set_renderer(
+                        solid,
+                        &gpu,
+                        &self.qh,
+                        self.compositor_state.wl_compositor(),
+                    );
                     out.current_wallpaper = None;
                     out.audio_track = None;
                     out.audio_handle = None;
@@ -858,10 +897,18 @@ impl Engine {
             None
         };
 
+        let cursor_shape_mgr = registry_state
+            .bind_one::<WpCursorShapeManagerV1, EngineState, ()>(&qh, 1..=1, ())
+            .ok();
+
         let mut seat_state = SeatState::new(&globals, &qh);
         let mut pointers = Vec::new();
+        let mut cursor_shape_devices = Vec::new();
         for seat in seat_state.seats() {
             if let Ok(pointer) = seat_state.get_pointer(&qh, &seat) {
+                if let Some(mgr) = &cursor_shape_mgr {
+                    cursor_shape_devices.push(mgr.get_pointer(&pointer, &qh, ()));
+                }
                 pointers.push(pointer);
             }
         }
@@ -909,6 +956,8 @@ impl Engine {
             output_state,
             seat_state,
             pointers,
+            cursor_shape_mgr,
+            cursor_shape_devices,
             compositor_state,
             layer_shell,
             wgpu_instance,

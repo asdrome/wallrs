@@ -8,7 +8,10 @@ use smithay_client_toolkit::{
 use std::ptr::NonNull;
 use std::time::{Duration, Instant};
 use thiserror::Error;
-use wayland_client::{Connection, Proxy, QueueHandle, protocol::wl_output};
+use wayland_client::{
+    Connection, Proxy, QueueHandle,
+    protocol::{wl_compositor, wl_output},
+};
 
 use crate::engine::EngineState;
 use wallrs_render::{FrameContext, WallpaperRenderer};
@@ -102,6 +105,7 @@ impl OutputSurface {
         conn: &Connection,
         qh: &QueueHandle<EngineState>,
         renderer_factory: &dyn Fn() -> Box<dyn WallpaperRenderer>,
+        compositor: &wl_compositor::WlCompositor,
     ) -> Result<(), OutputError> {
         let width = if new_size.0 > 0 { new_size.0 } else { 1920 };
         let height = if new_size.1 > 0 { new_size.1 } else { 1080 };
@@ -156,6 +160,8 @@ impl OutputSurface {
             self.width = width;
             self.height = height;
             self.configured = true;
+
+            self.update_input_region(compositor, qh);
 
             // Immediately render the first frame to attach buffer, map surface in compositor, and kick off frame loop
             self.render_frame(gpu.device, gpu.queue, qh);
@@ -363,6 +369,7 @@ impl OutputSurface {
         mut renderer: Box<dyn WallpaperRenderer>,
         gpu: &GpuContext<'_>,
         qh: &QueueHandle<EngineState>,
+        compositor: &wl_compositor::WlCompositor,
     ) -> Result<(), OutputError> {
         if let Some(config) = &self.surface_config {
             renderer
@@ -377,6 +384,7 @@ impl OutputSurface {
         self.start_time = Instant::now();
         self.last_frame_time = None;
         self.last_rendered_frame_time = None;
+        self.update_input_region(compositor, qh);
         if self.configured {
             self.render_frame(gpu.device, gpu.queue, qh);
         }
@@ -386,6 +394,34 @@ impl OutputSurface {
             let _ = r.set_property("pause", wallrs_proto::PropertyValue::Bool(true));
         }
         Ok(())
+    }
+
+    /// Updates the Wayland surface input region based on whether the active wallpaper requires pointer interaction.
+    ///
+    /// When `wants_pointer` is false, an empty `WlRegion` is applied so all pointer events and clicks
+    /// pass through to the underlying desktop (e.g., KDE Plasma's desktop containment, desktop icons,
+    /// and popup grab dismissal for application launchers like Kickoff).
+    pub fn update_input_region(
+        &mut self,
+        compositor: &wl_compositor::WlCompositor,
+        qh: &QueueHandle<EngineState>,
+    ) {
+        let wants_pointer = self
+            .renderer
+            .as_ref()
+            .map(|r| r.wants_pointer())
+            .unwrap_or(false);
+
+        if wants_pointer {
+            self.layer_surface.wl_surface().set_input_region(None);
+        } else {
+            let region = compositor.create_region(qh, ());
+            self.layer_surface
+                .wl_surface()
+                .set_input_region(Some(&region));
+            region.destroy();
+        }
+        self.layer_surface.commit();
     }
 
     /// Sets a dynamic property on the active wallpaper renderer.

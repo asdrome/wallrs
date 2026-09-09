@@ -146,7 +146,12 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                             queue: &state.wgpu_queue,
                         };
                         let renderer = Box::new(wallrs_render::SolidColorRenderer::new(c));
-                        if let Err(e) = out.set_renderer(renderer, &gpu, &state.qh) {
+                        if let Err(e) = out.set_renderer(
+                            renderer,
+                            &gpu,
+                            &state.qh,
+                            state.compositor_state.wl_compositor(),
+                        ) {
                             error = Some(e.to_string());
                             break;
                         }
@@ -549,7 +554,12 @@ pub fn apply_wallpaper(
                         }
                     };
 
-                    if let Err(e) = out.set_renderer(renderer, &gpu, &state.qh) {
+                    if let Err(e) = out.set_renderer(
+                        renderer,
+                        &gpu,
+                        &state.qh,
+                        state.compositor_state.wl_compositor(),
+                    ) {
                         error = Some(e.to_string());
                         break;
                     }
@@ -630,7 +640,12 @@ pub fn apply_wallpaper(
                         }
                     };
 
-                    if let Err(e) = out.set_renderer(renderer, &gpu, &state.qh) {
+                    if let Err(e) = out.set_renderer(
+                        renderer,
+                        &gpu,
+                        &state.qh,
+                        state.compositor_state.wl_compositor(),
+                    ) {
                         error = Some(e.to_string());
                         break;
                     }
@@ -718,7 +733,12 @@ pub fn apply_wallpaper(
                         out.audio_muted = true;
                     }
 
-                    if let Err(e) = out.set_renderer(renderer, &gpu, &state.qh) {
+                    if let Err(e) = out.set_renderer(
+                        renderer,
+                        &gpu,
+                        &state.qh,
+                        state.compositor_state.wl_compositor(),
+                    ) {
                         error = Some(e.to_string());
                         break;
                     }

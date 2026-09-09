@@ -85,6 +85,14 @@ pub trait WallpaperRenderer: Send {
         true
     }
 
+    /// Returns whether this wallpaper requires interactive pointer input (e.g., cursor parallax or mouse uniforms).
+    ///
+    /// When `false` (the default), the Wayland surface configures an empty input region (`WlRegion`),
+    /// granting complete click-through pass-through to the underlying desktop.
+    fn wants_pointer(&self) -> bool {
+        false
+    }
+
     /// Tears down any allocated resources.
     fn teardown(&mut self) {}
 }
@@ -205,6 +213,7 @@ mod tests {
     fn test_solid_color_renderer_properties() {
         let mut renderer = SolidColorRenderer::default();
         assert!(!renderer.is_animated());
+        assert!(!renderer.wants_pointer());
         assert_eq!(renderer.color, [0.059, 0.090, 0.165, 1.0]);
 
         renderer.resize(1920, 1080);

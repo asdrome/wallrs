@@ -513,6 +513,16 @@ impl WallpaperRenderer for ImageRenderer {
                 .any(|l| l.pan.is_some() || l.parallax.unwrap_or(0.0).abs() > 1e-4)
         }
     }
+
+    fn wants_pointer(&self) -> bool {
+        if !self.loaded_layers.is_empty() {
+            self.loaded_layers.iter().any(|l| l.parallax.abs() > 1e-4)
+        } else {
+            self.layer_defs
+                .iter()
+                .any(|l| l.parallax.unwrap_or(0.0).abs() > 1e-4)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -543,6 +553,7 @@ mod tests {
         );
         let renderer_static = ImageRenderer::from_memory_layers(vec![layer_static.clone()]);
         assert!(!renderer_static.is_animated());
+        assert!(!renderer_static.wants_pointer());
 
         // Create 2 2x2 RGBA layers where layer2 has pan and parallax
         let layer1 = layer_static;
@@ -562,6 +573,7 @@ mod tests {
         let renderer = ImageRenderer::from_memory_layers(vec![layer1, layer2]);
         assert_eq!(renderer.layer_count(), 2);
         assert!(renderer.is_animated());
+        assert!(renderer.wants_pointer());
     }
 
     #[test]
