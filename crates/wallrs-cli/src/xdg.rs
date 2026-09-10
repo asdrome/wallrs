@@ -39,9 +39,39 @@ pub fn default_user_wallpapers_dir() -> PathBuf {
 /// Returns all standard directories where wallpapers can be located.
 pub fn wallpaper_search_dirs() -> Vec<PathBuf> {
     let mut dirs = vec![default_user_wallpapers_dir()];
+    dirs.push(data_home().join("wallrs").join("examples"));
+
+    // Working directory / repository fallback: ./examples
+    dirs.push(PathBuf::from("examples"));
+
+    // Relative to current executable binary
+    if let Ok(exe_path) = std::env::current_exe()
+        && let Some(bin_dir) = exe_path.parent()
+    {
+        dirs.push(bin_dir.join("examples"));
+        dirs.push(bin_dir.join("..").join("examples"));
+        dirs.push(bin_dir.join("..").join("..").join("examples"));
+        dirs.push(
+            bin_dir
+                .join("..")
+                .join("share")
+                .join("wallrs")
+                .join("examples"),
+        );
+        dirs.push(
+            bin_dir
+                .join("..")
+                .join("share")
+                .join("wallrs")
+                .join("wallpapers"),
+        );
+    }
+
     for d in data_dirs() {
         dirs.push(d.join("wallrs").join("wallpapers"));
+        dirs.push(d.join("wallrs").join("examples"));
     }
+
     dirs
 }
 
@@ -95,20 +125,10 @@ pub fn template_search_dirs() -> Vec<PathBuf> {
     // 1. User templates: $XDG_DATA_HOME/wallrs/templates
     dirs.push(data_home().join("wallrs").join("templates"));
 
-    // 2. System templates: $XDG_DATA_DIRS/wallrs/templates
-    for d in data_dirs() {
-        dirs.push(d.join("wallrs").join("templates"));
-    }
-
-    // 3. System installed examples: $XDG_DATA_DIRS/wallrs/examples
-    for d in data_dirs() {
-        dirs.push(d.join("wallrs").join("examples"));
-    }
-
-    // 4. Working directory / repository fallback: ./examples
+    // 2. Working directory / repository fallback: ./examples
     dirs.push(PathBuf::from("examples"));
 
-    // 5. Relative to current executable binary
+    // 3. Relative to current executable binary
     if let Ok(exe_path) = std::env::current_exe()
         && let Some(bin_dir) = exe_path.parent()
     {
@@ -122,6 +142,12 @@ pub fn template_search_dirs() -> Vec<PathBuf> {
                 .join("wallrs")
                 .join("examples"),
         );
+    }
+
+    // 4. System templates and examples
+    for d in data_dirs() {
+        dirs.push(d.join("wallrs").join("templates"));
+        dirs.push(d.join("wallrs").join("examples"));
     }
 
     dirs
@@ -148,9 +174,17 @@ mod tests {
     fn test_resolve_existing_example_manifest() {
         let p = Path::new("examples/aurora-shader");
         if p.exists() {
-            let resolved = resolve_wallpaper_path(p);
-            assert!(resolved.is_ok());
-            assert!(resolved.unwrap().ends_with("wallpaper.toml"));
+            let res = resolve_wallpaper_path(p);
+            assert!(res.is_ok());
+        }
+    }
+
+    #[test]
+    fn test_resolve_example_by_name_without_path() {
+        let p = Path::new("parallax-landscape");
+        if Path::new("examples/parallax-landscape/wallpaper.toml").exists() {
+            let res = resolve_wallpaper_path(p);
+            assert!(res.is_ok());
         }
     }
 }

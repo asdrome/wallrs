@@ -126,15 +126,71 @@ parallax = 0.35
 
 Layers configured with `day_night` respond automatically to the host's local clock:
 - **`"tint"`**: Modulates the layer through smooth ambient color grades (golden amber at dawn/sunset, neutral daylight at noon, midnight indigo after dusk).
-- **`"night"`**: Dynamically fades layer opacity based on solar elevation, rendering at 100% opacity at night and 0% during full daylight (ideal for stars, nebulae, city lamps).
-- **`"day"`**: Renders at full opacity during daylight hours and fades out at night.
+- **`"night"`**: Dynamically fades layer opacity based on solar elevation, rendering at 100% opacity at night and 0% during full daylight (ideal for stars, nebulae, city lamps, and night skies).
+- **`"day"`**: Renders at full opacity during daylight hours and fades out smoothly at dusk (ideal for sun, daytime skies, birds).
 
-You can interactively preview or test any hour of the day via CLI / IPC:
+##### Dual-Layer Day/Night Sky Crossfade
+
+For dramatic transitions between a brilliant daylight sky and a pitch-black starry night, you can crossfade two dedicated sky textures:
+
+```toml
+# Daytime sky (fades out at dusk)
+[[image.layers]]
+path = "sky-day.png"
+parallax = 0.04
+day_night = "day"
+
+# Deep nocturnal sky (fades in at dusk)
+[[image.layers]]
+path = "sky-night.png"
+parallax = 0.04
+day_night = "night"
+```
+
+##### Custom Schedule & Lighting Curves (`[image.day_night]`)
+
+Wallpaper authors can customize the solar schedule and ambient tint color curve:
+
+```toml
+[image.day_night]
+dawn_start = 6.0    # Dawn begins (06:00)
+day_start = 8.5     # Full daylight reached (08:30)
+dusk_start = 18.0   # Sunset / dusk begins (18:00)
+night_start = 21.0  # Full night reached (21:00)
+
+# Optional keyframe nodes overriding default diurnal tint curve
+[[image.day_night.tint_curve]]
+hour = 2.0
+tint = [0.15, 0.22, 0.40] # Midnight deep cool blue
+
+[[image.day_night.tint_curve]]
+hour = 12.0
+tint = [1.00, 1.00, 1.00] # Midday neutral daylight
+
+[[image.day_night.tint_curve]]
+hour = 18.5
+tint = [1.05, 0.80, 0.58] # Golden hour sunset warmth
+```
+
+##### Interactive Runtime & Preview Controls
+
+You can interactively preview or override lighting and time at runtime via `wallctl set-property`:
+
 ```bash
-wallctl set-property hour 18.5       # Golden hour sunset preview
-wallctl set-property hour 23.0       # Midnight stars preview
-wallctl set-property hour 12.0       # Midday preview
-wallctl set-property hour -1         # Revert back to live host clock
+# Time simulation (accepts decimal hour, HH:MM string, or "auto"/"reset")
+wallctl set-property hour 18.5          # Decimal hour (18:30)
+wallctl set-property time_of_day 14:30   # Clock string format
+wallctl set-property hour reset         # Revert back to live host clock (or -1)
+
+# Direct daylight factor override [0.0..1.0]
+wallctl set-property daylight 1.0       # Force full daytime lighting
+wallctl set-property daylight 0.0       # Force full nighttime lighting
+wallctl set-property daylight reset     # Revert to automatic solar cycle
+
+# Direct ambient tint override
+wallctl set-property ambient_tint "#ffaa66"     # Golden evening hex tint
+wallctl set-property ambient_tint "0.2,0.3,0.5" # RGB float values
+wallctl set-property ambient_tint reset         # Revert to diurnal tint curve
 ```
 
 ### 2. Shader Wallpapers (`type = "shader"`)

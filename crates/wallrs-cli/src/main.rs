@@ -218,6 +218,11 @@ pub fn parse_property_value(val: &str) -> PropertyValue {
     if let Ok(num) = val.parse::<f32>() {
         return PropertyValue::Number(num);
     }
+    if let Some((h_str, m_str)) = val.split_once(':')
+        && let (Ok(h), Ok(m)) = (h_str.trim().parse::<f32>(), m_str.trim().parse::<f32>())
+    {
+        return PropertyValue::Number((h + m / 60.0).rem_euclid(24.0));
+    }
     if val.starts_with('#')
         && let Ok(color) = parse_hex_color(val)
     {
@@ -838,6 +843,23 @@ mod tests {
                 assert!(args.force);
             }
             _ => panic!("Expected Subcommands::New"),
+        }
+    }
+
+    #[test]
+    fn test_parse_property_value_time() {
+        assert_eq!(parse_property_value("14.5"), PropertyValue::Number(14.5));
+        assert_eq!(parse_property_value("14:30"), PropertyValue::Number(14.5));
+        assert_eq!(parse_property_value("06:15"), PropertyValue::Number(6.25));
+        assert_eq!(parse_property_value("true"), PropertyValue::Bool(true));
+        assert_eq!(
+            parse_property_value("reset"),
+            PropertyValue::Text("reset".into())
+        );
+        if let PropertyValue::Color(c) = parse_property_value("#ffffff") {
+            assert_eq!(c, [1.0, 1.0, 1.0, 1.0]);
+        } else {
+            panic!("Expected color");
         }
     }
 }

@@ -3,30 +3,72 @@ use crate::xdg;
 use clap::Args;
 use std::path::{Path, PathBuf};
 
-// Embedded fallbacks sourced directly from repository examples
-const EMBEDDED_AURORA_TOML: &str = include_str!("../../../examples/aurora-shader/wallpaper.toml");
-const EMBEDDED_AURORA_WGSL: &str = include_str!("../../../examples/aurora-shader/aurora.wgsl");
+// Universal lightweight procedural fallback template (< 1 KB)
+const UNIVERSAL_FALLBACK_TOML: &str = r#"[wallpaper]
+type = "shader"
+name = "universal-shader"
+author = "wallrs"
+description = "Minimal procedural shader wallpaper"
 
-const EMBEDDED_PLASMA_TOML: &str =
-    include_str!("../../../examples/shadertoy-plasma/wallpaper.toml");
-const EMBEDDED_PLASMA_GLSL: &str = include_str!("../../../examples/shadertoy-plasma/plasma.glsl");
+[shader]
+entry = "aurora.wgsl"
+audio = false
+"#;
 
-const EMBEDDED_VISUALIZER_TOML: &str =
-    include_str!("../../../examples/audio-visualizer/wallpaper.toml");
-const EMBEDDED_VISUALIZER_WGSL: &str =
-    include_str!("../../../examples/audio-visualizer/visualizer.wgsl");
+const UNIVERSAL_FALLBACK_WGSL: &str = r#"struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
 
-const EMBEDDED_LANDSCAPE_TOML: &str =
-    include_str!("../../../examples/parallax-landscape/wallpaper.toml");
-const EMBEDDED_LANDSCAPE_BG: &[u8] = include_bytes!("../../../examples/parallax-landscape/bg.png");
-const EMBEDDED_LANDSCAPE_STARS: &[u8] =
-    include_bytes!("../../../examples/parallax-landscape/stars.png");
-const EMBEDDED_LANDSCAPE_CLOUDS: &[u8] =
-    include_bytes!("../../../examples/parallax-landscape/clouds.png");
-const EMBEDDED_LANDSCAPE_FG: &[u8] = include_bytes!("../../../examples/parallax-landscape/fg.png");
+struct TimeUniform {
+    time: f32,
+    delta: f32,
+    frame: u32,
+    _pad: f32,
+};
 
-const EMBEDDED_VIDEO_TOML: &str = include_str!("../../../examples/video-wallpaper/wallpaper.toml");
-const EMBEDDED_VIDEO_SAMPLE: &[u8] = include_bytes!("../../../examples/video-wallpaper/sample.mp4");
+@group(0) @binding(0)
+var<uniform> u_time: TimeUniform;
+
+@vertex
+fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
+    var pos = array<vec2<f32>, 6>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 1.0, -1.0),
+        vec2<f32>(-1.0,  1.0),
+        vec2<f32>(-1.0,  1.0),
+        vec2<f32>( 1.0, -1.0),
+        vec2<f32>( 1.0,  1.0)
+    );
+    var out: VertexOutput;
+    let p = pos[in_vertex_index];
+    out.position = vec4<f32>(p, 0.0, 1.0);
+    out.uv = vec2<f32>(p.x * 0.5 + 0.5, -p.y * 0.5 + 0.5);
+    return out;
+}
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    let uv = in.uv;
+    let t = u_time.time * 0.4;
+    let wave1 = sin(uv.x * 3.5 + t) * 0.12;
+    let wave2 = cos(uv.y * 2.8 - t * 0.7) * 0.12;
+    let col_dark = vec3<f32>(0.04, 0.06, 0.16);
+    let col_teal = vec3<f32>(0.12, 0.60, 0.52);
+    let col_violet = vec3<f32>(0.55, 0.22, 0.68);
+    let f = clamp(uv.y + wave1 + wave2, 0.0, 1.0);
+    let rgb = mix(col_dark, mix(col_teal, col_violet, uv.x), f);
+    return vec4<f32>(rgb, 1.0);
+}
+"#;
+
+fn apply_embedded_fallback(target_dir: &Path) -> Result<(), String> {
+    std::fs::write(target_dir.join("wallpaper.toml"), UNIVERSAL_FALLBACK_TOML)
+        .map_err(|e| format!("Failed to write wallpaper.toml: {e}"))?;
+    std::fs::write(target_dir.join("aurora.wgsl"), UNIVERSAL_FALLBACK_WGSL)
+        .map_err(|e| format!("Failed to write aurora.wgsl: {e}"))?;
+    Ok(())
+}
 
 #[derive(Args, Debug, Clone)]
 pub struct NewWallpaperArgs {
@@ -189,49 +231,6 @@ fn determine_template_name(args: &NewWallpaperArgs, wallpaper_type: &str) -> Str
     }
 }
 
-fn apply_embedded_fallback(template_name: &str, target_dir: &Path) -> Result<(), String> {
-    match template_name {
-        "shadertoy-plasma" => {
-            std::fs::write(target_dir.join("wallpaper.toml"), EMBEDDED_PLASMA_TOML)
-                .map_err(|e| format!("Failed to write wallpaper.toml: {e}"))?;
-            std::fs::write(target_dir.join("plasma.glsl"), EMBEDDED_PLASMA_GLSL)
-                .map_err(|e| format!("Failed to write plasma.glsl: {e}"))?;
-        }
-        "audio-visualizer" => {
-            std::fs::write(target_dir.join("wallpaper.toml"), EMBEDDED_VISUALIZER_TOML)
-                .map_err(|e| format!("Failed to write wallpaper.toml: {e}"))?;
-            std::fs::write(target_dir.join("visualizer.wgsl"), EMBEDDED_VISUALIZER_WGSL)
-                .map_err(|e| format!("Failed to write visualizer.wgsl: {e}"))?;
-        }
-        "parallax-landscape" => {
-            std::fs::write(target_dir.join("wallpaper.toml"), EMBEDDED_LANDSCAPE_TOML)
-                .map_err(|e| format!("Failed to write wallpaper.toml: {e}"))?;
-            std::fs::write(target_dir.join("bg.png"), EMBEDDED_LANDSCAPE_BG)
-                .map_err(|e| format!("Failed to write bg.png: {e}"))?;
-            std::fs::write(target_dir.join("stars.png"), EMBEDDED_LANDSCAPE_STARS)
-                .map_err(|e| format!("Failed to write stars.png: {e}"))?;
-            std::fs::write(target_dir.join("clouds.png"), EMBEDDED_LANDSCAPE_CLOUDS)
-                .map_err(|e| format!("Failed to write clouds.png: {e}"))?;
-            std::fs::write(target_dir.join("fg.png"), EMBEDDED_LANDSCAPE_FG)
-                .map_err(|e| format!("Failed to write fg.png: {e}"))?;
-        }
-        "video-wallpaper" => {
-            std::fs::write(target_dir.join("wallpaper.toml"), EMBEDDED_VIDEO_TOML)
-                .map_err(|e| format!("Failed to write wallpaper.toml: {e}"))?;
-            std::fs::write(target_dir.join("sample.mp4"), EMBEDDED_VIDEO_SAMPLE)
-                .map_err(|e| format!("Failed to write sample.mp4: {e}"))?;
-        }
-        _ => {
-            // Default to aurora-shader
-            std::fs::write(target_dir.join("wallpaper.toml"), EMBEDDED_AURORA_TOML)
-                .map_err(|e| format!("Failed to write wallpaper.toml: {e}"))?;
-            std::fs::write(target_dir.join("aurora.wgsl"), EMBEDDED_AURORA_WGSL)
-                .map_err(|e| format!("Failed to write aurora.wgsl: {e}"))?;
-        }
-    }
-    Ok(())
-}
-
 pub fn handle_new_wallpaper(args: NewWallpaperArgs) -> Result<(), String> {
     let (target_dir, wallpaper_name) =
         resolve_destination(&args.name, args.dir.as_deref(), args.local);
@@ -284,59 +283,64 @@ pub fn handle_new_wallpaper(args: NewWallpaperArgs) -> Result<(), String> {
             _ => "Live wallpaper for wallrs".into(),
         });
 
-    let template_name = determine_template_name(&args, &wallpaper_type);
+    let has_custom_assets =
+        !args.layers.is_empty() || args.video.is_some() || args.shader.is_some();
 
-    // 1. Copy template files from disk or embedded fallback
-    if let Some(src_dir) = find_template_on_disk(&template_name) {
-        copy_dir_recursive(&src_dir, &target_dir)
-            .map_err(|e| format!("Failed to copy template from {:?}: {}", src_dir, e))?;
-    } else {
-        apply_embedded_fallback(&template_name, &target_dir)?;
-    }
-
-    // 2. Custom asset overrides
     let mut custom_shader_entry: Option<String> = None;
-    if let Some(ref shader_src) = args.shader {
-        if !shader_src.exists() {
-            return Err(format!("Specified shader file not found: {:?}", shader_src));
-        }
-        let file_name = shader_src
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| format!("Invalid shader filename: {:?}", shader_src))?;
-        std::fs::copy(shader_src, target_dir.join(file_name))
-            .map_err(|e| format!("Failed to copy shader file: {e}"))?;
-        custom_shader_entry = Some(file_name.to_string());
-    }
-
     let mut custom_layers: Vec<String> = Vec::new();
-    if !args.layers.is_empty() {
-        for layer_path in &args.layers {
-            if !layer_path.exists() {
-                return Err(format!("Specified layer file not found: {:?}", layer_path));
+    let mut custom_video_path: Option<String> = None;
+
+    if has_custom_assets {
+        // User supplied their own assets: copy ONLY user assets, never template files!
+        if let Some(ref shader_src) = args.shader {
+            if !shader_src.exists() {
+                return Err(format!("Specified shader file not found: {:?}", shader_src));
             }
-            let file_name = layer_path
+            let file_name = shader_src
                 .file_name()
                 .and_then(|n| n.to_str())
-                .ok_or_else(|| format!("Invalid layer filename: {:?}", layer_path))?;
-            std::fs::copy(layer_path, target_dir.join(file_name))
-                .map_err(|e| format!("Failed to copy layer file: {e}"))?;
-            custom_layers.push(file_name.to_string());
+                .ok_or_else(|| format!("Invalid shader filename: {:?}", shader_src))?;
+            std::fs::copy(shader_src, target_dir.join(file_name))
+                .map_err(|e| format!("Failed to copy shader file: {e}"))?;
+            custom_shader_entry = Some(file_name.to_string());
         }
-    }
 
-    let mut custom_video_path: Option<String> = None;
-    if let Some(ref video_src) = args.video {
-        if !video_src.exists() {
-            return Err(format!("Specified video file not found: {:?}", video_src));
+        if !args.layers.is_empty() {
+            for layer_path in &args.layers {
+                if !layer_path.exists() {
+                    return Err(format!("Specified layer file not found: {:?}", layer_path));
+                }
+                let file_name = layer_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .ok_or_else(|| format!("Invalid layer filename: {:?}", layer_path))?;
+                std::fs::copy(layer_path, target_dir.join(file_name))
+                    .map_err(|e| format!("Failed to copy layer file: {e}"))?;
+                custom_layers.push(file_name.to_string());
+            }
         }
-        let file_name = video_src
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| format!("Invalid video filename: {:?}", video_src))?;
-        std::fs::copy(video_src, target_dir.join(file_name))
-            .map_err(|e| format!("Failed to copy video file: {e}"))?;
-        custom_video_path = Some(file_name.to_string());
+
+        if let Some(ref video_src) = args.video {
+            if !video_src.exists() {
+                return Err(format!("Specified video file not found: {:?}", video_src));
+            }
+            let file_name = video_src
+                .file_name()
+                .and_then(|n| n.to_str())
+                .ok_or_else(|| format!("Invalid video filename: {:?}", video_src))?;
+            std::fs::copy(video_src, target_dir.join(file_name))
+                .map_err(|e| format!("Failed to copy video file: {e}"))?;
+            custom_video_path = Some(file_name.to_string());
+        }
+    } else {
+        // No custom assets provided: copy full template from disk if available, or write universal fallback
+        let template_name = determine_template_name(&args, &wallpaper_type);
+        if let Some(src_dir) = find_template_on_disk(&template_name) {
+            copy_dir_recursive(&src_dir, &target_dir)
+                .map_err(|e| format!("Failed to copy template from {:?}: {}", src_dir, e))?;
+        } else {
+            apply_embedded_fallback(&target_dir)?;
+        }
     }
 
     let mut custom_audio_path: Option<String> = None;
@@ -355,6 +359,12 @@ pub fn handle_new_wallpaper(args: NewWallpaperArgs) -> Result<(), String> {
 
     // 3. Rewrite wallpaper.toml with sanitized metadata and configuration
     let manifest_path = target_dir.join("wallpaper.toml");
+    let existing_template_content = if !has_custom_assets && manifest_path.exists() {
+        std::fs::read_to_string(&manifest_path).ok()
+    } else {
+        None
+    };
+
     let mut toml_str = format!(
         "[wallpaper]\ntype = \"{}\"\nname = \"{}\"\nauthor = \"{}\"\ndescription = \"{}\"\n",
         wallpaper_type, wallpaper_name, author, description
@@ -362,28 +372,40 @@ pub fn handle_new_wallpaper(args: NewWallpaperArgs) -> Result<(), String> {
 
     match wallpaper_type.as_str() {
         "shader" => {
-            let entry = if let Some(e) = custom_shader_entry {
-                e
-            } else if template_name == "shadertoy-plasma" {
-                "plasma.glsl".into()
-            } else if template_name == "audio-visualizer" {
-                "visualizer.wgsl".into()
+            if let Some(ref content) = existing_template_content
+                && let Some(idx) = content.find("[shader]")
+            {
+                toml_str.push('\n');
+                toml_str.push_str(&content[idx..]);
             } else {
-                "aurora.wgsl".into()
-            };
-            let audio_val = if args.audio || template_name == "audio-visualizer" {
-                "true"
-            } else {
-                "false"
-            };
-            toml_str.push_str(&format!(
-                "\n[shader]\nentry = \"{}\"\naudio = {}\n",
-                entry, audio_val
-            ));
+                let entry = if let Some(e) = custom_shader_entry {
+                    e
+                } else if target_dir.join("visualizer.wgsl").exists() {
+                    "visualizer.wgsl".into()
+                } else if target_dir.join("plasma.glsl").exists() {
+                    "plasma.glsl".into()
+                } else {
+                    "aurora.wgsl".into()
+                };
+                let audio_val = if args.audio { "true" } else { "false" };
+                toml_str.push_str(&format!(
+                    "\n[shader]\nentry = \"{}\"\naudio = {}\n",
+                    entry, audio_val
+                ));
+            }
         }
         "image" => {
-            toml_str.push('\n');
-            if !custom_layers.is_empty() {
+            if let Some(ref content) = existing_template_content
+                && (content.contains("[image]") || content.contains("[[image.layers]]"))
+            {
+                let idx = content
+                    .find("[image]")
+                    .or_else(|| content.find("[[image.layers]]"))
+                    .unwrap();
+                toml_str.push('\n');
+                toml_str.push_str(&content[idx..]);
+            } else {
+                toml_str.push('\n');
                 for (i, layer_file) in custom_layers.iter().enumerate() {
                     toml_str.push_str(&format!("[[image.layers]]\npath = \"{}\"\n", layer_file));
                     if i == custom_layers.len() - 1
@@ -393,20 +415,23 @@ pub fn handle_new_wallpaper(args: NewWallpaperArgs) -> Result<(), String> {
                     }
                     toml_str.push('\n');
                 }
-            } else {
-                toml_str.push_str(
-                    "[[image.layers]]\npath = \"bg.png\"\n\n[[image.layers]]\npath = \"fg.png\"\nparallax = 0.40\npan = { speed = 0.005, axis = \"x\" }\n",
-                );
             }
         }
         "video" => {
-            let vid = custom_video_path.unwrap_or_else(|| "sample.mp4".into());
-            let vol = args.volume.unwrap_or(50.0);
-            let lp = !args.no_loop;
-            toml_str.push_str(&format!(
-                "\n[video]\npath = \"{}\"\nvolume = {:.1}\nloop = {}\n",
-                vid, vol, lp
-            ));
+            if let Some(ref content) = existing_template_content
+                && let Some(idx) = content.find("[video]")
+            {
+                toml_str.push('\n');
+                toml_str.push_str(&content[idx..]);
+            } else {
+                let vid = custom_video_path.unwrap_or_else(|| "sample.mp4".into());
+                let vol = args.volume.unwrap_or(50.0);
+                let lp = !args.no_loop;
+                toml_str.push_str(&format!(
+                    "\n[video]\npath = \"{}\"\nvolume = {:.1}\nloop = {}\n",
+                    vid, vol, lp
+                ));
+            }
         }
         _ => unreachable!(),
     }
@@ -445,7 +470,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_scaffold_shader_with_embedded_fallback() {
+    fn test_scaffold_shader_with_template() {
         let temp_dir = std::env::temp_dir().join(format!(
             "wallrs_test_scaffold_shader_{}",
             std::process::id()
@@ -523,7 +548,7 @@ mod tests {
     }
 
     #[test]
-    fn test_scaffold_image_with_embedded_fallback() {
+    fn test_scaffold_image_from_disk_template() {
         let temp_dir =
             std::env::temp_dir().join(format!("wallrs_test_scaffold_img_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&temp_dir);
@@ -557,6 +582,81 @@ mod tests {
         assert!(wall_dir.join("fg.png").exists());
 
         validate_wallpaper(&wall_dir).expect("Validation should pass");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_scaffold_custom_image_layers_no_dead_weight() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "wallrs_test_scaffold_custom_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        let input_dir = temp_dir.join("inputs");
+        std::fs::create_dir_all(&input_dir).unwrap();
+        let custom_img = input_dir.join("my_layer.png");
+        let png_bytes = [
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+            0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9c, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00,
+            0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+        ];
+        std::fs::write(&custom_img, png_bytes).unwrap();
+
+        let args = NewWallpaperArgs {
+            name: "test-custom-wall".into(),
+            r#type: Some("image".into()),
+            template: None,
+            dir: Some(temp_dir.clone()),
+            local: false,
+            author: Some("Tester".into()),
+            description: Some("Test custom image wallpaper".into()),
+            force: true,
+            shader: None,
+            audio: false,
+            glsl: false,
+            layers: vec![custom_img],
+            parallax: Some(0.35),
+            video: None,
+            volume: None,
+            no_loop: false,
+            audio_track: None,
+            audio_volume: None,
+        };
+
+        handle_new_wallpaper(args).expect("Failed to scaffold custom image wallpaper");
+
+        let wall_dir = temp_dir.join("test-custom-wall");
+        assert!(wall_dir.join("wallpaper.toml").exists());
+        assert!(wall_dir.join("my_layer.png").exists());
+
+        // CRITICAL CHECK: Verify that template defaults (bg, fg, sun, moon, stars) were NOT copied!
+        assert!(!wall_dir.join("bg.png").exists());
+        assert!(!wall_dir.join("fg.png").exists());
+        assert!(!wall_dir.join("sun.png").exists());
+        assert!(!wall_dir.join("moon.png").exists());
+        assert!(!wall_dir.join("stars.png").exists());
+
+        validate_wallpaper(&wall_dir).expect("Validation should pass");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_universal_fallback_standalone() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "wallrs_test_scaffold_fallback_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        apply_embedded_fallback(&temp_dir).expect("Universal fallback write should succeed");
+        assert!(temp_dir.join("wallpaper.toml").exists());
+        assert!(temp_dir.join("aurora.wgsl").exists());
+
+        validate_wallpaper(&temp_dir).expect("Universal fallback should pass validation");
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

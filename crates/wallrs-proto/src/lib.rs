@@ -111,6 +111,31 @@ pub struct WallpaperMeta {
 pub struct ImageConfig {
     #[serde(default)]
     pub layers: Vec<ImageLayerConfig>,
+    #[serde(default)]
+    pub day_night: Option<DayNightScheduleConfig>,
+}
+
+/// Global day/night lighting schedule and custom ambient tint curve for an image wallpaper.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DayNightScheduleConfig {
+    /// Hour when dawn begins (default 5.5 / 05:30)
+    pub dawn_start: Option<f32>,
+    /// Hour when full daylight is reached (default 8.0 / 08:00)
+    pub day_start: Option<f32>,
+    /// Hour when dusk begins (default 18.0 / 18:00)
+    pub dusk_start: Option<f32>,
+    /// Hour when full night is reached (default 21.0 / 21:00)
+    pub night_start: Option<f32>,
+    /// Custom ambient tint keyframe nodes
+    #[serde(default)]
+    pub tint_curve: Option<Vec<TintNodeConfig>>,
+}
+
+/// Keyframe node for custom ambient tint curve.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TintNodeConfig {
+    pub hour: f32,
+    pub tint: [f32; 3],
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -515,5 +540,47 @@ day_night = "day"
         assert_eq!(img.layers[1].tint, None);
 
         assert_eq!(img.layers[2].day_night, Some(DayNightMode::Day));
+    }
+
+    #[test]
+    fn test_day_night_schedule_manifest() {
+        let toml_data = r#"
+[wallpaper]
+type = "image"
+name = "custom-schedule"
+
+[image.day_night]
+dawn_start = 6.0
+day_start = 8.5
+dusk_start = 17.5
+night_start = 20.5
+
+[[image.day_night.tint_curve]]
+hour = 2.0
+tint = [0.15, 0.22, 0.40]
+
+[[image.day_night.tint_curve]]
+hour = 12.0
+tint = [1.0, 1.0, 1.0]
+
+[[image.layers]]
+path = "bg.png"
+day_night = "tint"
+"#;
+
+        let manifest = WallpaperManifest::from_toml_str(toml_data).expect("failed to parse TOML");
+        let img = manifest.image.expect("image config missing");
+        let dn = img.day_night.expect("day_night config missing");
+        assert_eq!(dn.dawn_start, Some(6.0));
+        assert_eq!(dn.day_start, Some(8.5));
+        assert_eq!(dn.dusk_start, Some(17.5));
+        assert_eq!(dn.night_start, Some(20.5));
+
+        let curve = dn.tint_curve.expect("tint_curve missing");
+        assert_eq!(curve.len(), 2);
+        assert_eq!(curve[0].hour, 2.0);
+        assert_eq!(curve[0].tint, [0.15, 0.22, 0.40]);
+        assert_eq!(curve[1].hour, 12.0);
+        assert_eq!(curve[1].tint, [1.0, 1.0, 1.0]);
     }
 }

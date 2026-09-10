@@ -51,7 +51,17 @@ case "$DESKTOP" in
         fi
         ;;
     *Hyprland*|*sway*|*wlroots*|*Sway*)
-        if command -v matugen &>/dev/null && [[ -x "$CONTRIB_DIR/hyprland-matugen.sh" ]]; then
+        ML4W_WALLPAPER=""
+        if command -v ml4w-wallpaper &>/dev/null; then
+            ML4W_WALLPAPER="ml4w-wallpaper"
+        elif [[ -x "$HOME/.config/ml4w/scripts/ml4w-wallpaper" ]]; then
+            ML4W_WALLPAPER="$HOME/.config/ml4w/scripts/ml4w-wallpaper"
+        fi
+
+        if [[ -n "$ML4W_WALLPAPER" ]]; then
+            PREVIEW_PATH="$("$WALLCTL" preview "$@")"
+            exec "$ML4W_WALLPAPER" "$PREVIEW_PATH" --skip-wallpaper
+        elif command -v matugen &>/dev/null && [[ -x "$CONTRIB_DIR/hyprland-matugen.sh" ]]; then
             exec "$CONTRIB_DIR/hyprland-matugen.sh" "$@"
         elif command -v matugen &>/dev/null; then
             PREVIEW_PATH="$("$WALLCTL" preview "$@")"

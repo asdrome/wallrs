@@ -1,6 +1,9 @@
 use std::path::{Path, PathBuf};
 use thiserror::Error;
-use wallrs_proto::{DayNightMode, OscillationConfig, PanConfig, WallpaperManifest};
+use wallrs_proto::{
+    DayNightMode, DayNightScheduleConfig, OscillationConfig, PanConfig, TintNodeConfig,
+    WallpaperManifest,
+};
 use wallrs_render::{FrameContext, PropertyValue, RendererError, WallpaperRenderer};
 
 #[derive(Debug, Error)]
@@ -92,48 +95,94 @@ pub fn local_time_of_day() -> f32 {
     tm.tm_hour as f32 + tm.tm_min as f32 / 60.0 + tm.tm_sec as f32 / 3600.0
 }
 
-/// Returns the daylight factor in `[0.0, 1.0]`:
-/// - `1.0` during full daylight (08:00 - 18:00)
-/// - `0.0` during full night (21:00 - 05:30)
+/// Returns the daylight factor in `[0.0, 1.0]` based on fractional hour and an optional schedule:
+/// - `1.0` during full daylight
+/// - `0.0` during full night
 /// - Smooth transition during dawn and dusk.
-pub fn daylight_factor_for_hour(hour: f32) -> f32 {
+pub fn daylight_factor_with_schedule(hour: f32, schedule: Option<&DayNightScheduleConfig>) -> f32 {
+    let dawn_start = schedule.and_then(|s| s.dawn_start).unwrap_or(5.5);
+    let day_start = schedule.and_then(|s| s.day_start).unwrap_or(8.0);
+    let dusk_start = schedule.and_then(|s| s.dusk_start).unwrap_or(18.0);
+    let night_start = schedule.and_then(|s| s.night_start).unwrap_or(21.0);
+
     let h = hour.rem_euclid(24.0);
-    if (8.0..=18.0).contains(&h) {
+    if h >= day_start && h <= dusk_start {
         1.0
-    } else if (21.0..=24.0).contains(&h) || (0.0..=5.5).contains(&h) {
+    } else if h >= night_start || h <= dawn_start {
         0.0
-    } else if (5.5..8.0).contains(&h) {
-        let t = (h - 5.5) / 2.5;
+    } else if h > dawn_start && h < day_start {
+        let span = (day_start - dawn_start).max(0.001);
+        let t = (h - dawn_start) / span;
         (t * std::f32::consts::PI * 0.5).sin().clamp(0.0, 1.0)
     } else {
-        let t = (h - 18.0) / 3.0;
+        let span = (night_start - dusk_start).max(0.001);
+        let t = (h - dusk_start) / span;
         (1.0 - t * std::f32::consts::PI * 0.5).sin().clamp(0.0, 1.0)
     }
 }
 
-/// Returns the ambient RGB tint factor based on fractional hour of the day.
-pub fn ambient_tint_for_hour(hour: f32) -> [f32; 3] {
+pub fn daylight_factor_for_hour(hour: f32) -> f32 {
+    daylight_factor_with_schedule(hour, None)
+}
+
+/// Returns the ambient RGB tint factor based on fractional hour of the day and optional custom tint curve.
+pub fn ambient_tint_with_curve(hour: f32, custom_nodes: Option<&[TintNodeConfig]>) -> [f32; 3] {
     let h = hour.rem_euclid(24.0);
 
-    // Key time nodes: (hour, [R, G, B])
-    let nodes: &[(f32, [f32; 3])] = &[
-        (2.0, [0.40, 0.50, 0.75]),  // Deep night (cool moonlight blue)
-        (5.0, [0.42, 0.52, 0.76]),  // Pre-dawn
-        (6.5, [0.95, 0.78, 0.85]),  // Sunrise / dawn glow
-        (8.5, [0.98, 0.98, 1.00]),  // Morning light
+    if let Some(nodes) = custom_nodes
+        && !nodes.is_empty()
+    {
+        let mut sorted: Vec<(f32, [f32; 3])> = nodes
+            .iter()
+            .map(|n| (n.hour.rem_euclid(24.0), n.tint))
+            .collect();
+        sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        if sorted.len() == 1 {
+            return sorted[0].1;
+        }
+
+        let (first_h, first_rgb) = sorted[0];
+        sorted.push((first_h + 24.0, first_rgb));
+
+        let query_h = if h < first_h { h + 24.0 } else { h };
+
+        for i in 0..sorted.len() - 1 {
+            let (h0, rgb0) = sorted[i];
+            let (h1, rgb1) = sorted[i + 1];
+            if query_h >= h0 && query_h <= h1 {
+                let span = (h1 - h0).max(0.0001);
+                let t = (query_h - h0) / span;
+                let s = t * t * (3.0 - 2.0 * t);
+                return [
+                    rgb0[0] * (1.0 - s) + rgb1[0] * s,
+                    rgb0[1] * (1.0 - s) + rgb1[1] * s,
+                    rgb0[2] * (1.0 - s) + rgb1[2] * s,
+                ];
+            }
+        }
+        return sorted[0].1;
+    }
+
+    // Default 24h lighting curve (darker nocturnal attenuation for realistic midnight sky)
+    let default_nodes: &[(f32, [f32; 3])] = &[
+        (2.0, [0.15, 0.22, 0.40]), // Deep night (cool moonlight blue, dark nocturnal contrast)
+        (5.0, [0.20, 0.28, 0.45]), // Pre-dawn
+        (6.5, [0.95, 0.78, 0.85]), // Sunrise / dawn glow
+        (8.5, [0.98, 0.98, 1.00]), // Morning light
         (12.0, [1.00, 1.00, 1.00]), // Midday (neutral bright)
         (16.5, [1.00, 0.98, 0.95]), // Late afternoon
         (18.5, [1.05, 0.80, 0.58]), // Golden hour / sunset
         (20.0, [0.65, 0.50, 0.85]), // Twilight / dusk
-        (21.5, [0.42, 0.50, 0.75]), // Nightfall
-        (26.0, [0.40, 0.50, 0.75]), // Wraparound to 02:00 (2.0 + 24.0)
+        (21.5, [0.25, 0.30, 0.50]), // Nightfall
+        (26.0, [0.15, 0.22, 0.40]), // Wraparound to 02:00 (2.0 + 24.0)
     ];
 
     let query_h = if h < 2.0 { h + 24.0 } else { h };
 
-    for i in 0..nodes.len() - 1 {
-        let (h0, rgb0) = nodes[i];
-        let (h1, rgb1) = nodes[i + 1];
+    for i in 0..default_nodes.len() - 1 {
+        let (h0, rgb0) = default_nodes[i];
+        let (h1, rgb1) = default_nodes[i + 1];
         if query_h >= h0 && query_h <= h1 {
             let t = (query_h - h0) / (h1 - h0);
             let s = t * t * (3.0 - 2.0 * t);
@@ -146,6 +195,27 @@ pub fn ambient_tint_for_hour(hour: f32) -> [f32; 3] {
     }
 
     [1.0, 1.0, 1.0]
+}
+
+pub fn ambient_tint_for_hour(hour: f32) -> [f32; 3] {
+    ambient_tint_with_curve(hour, None)
+}
+
+fn parse_hex_rgb(s: &str) -> Option<[f32; 3]> {
+    let clean = s.trim().trim_start_matches('#');
+    if clean.len() == 6 {
+        let r = u8::from_str_radix(&clean[0..2], 16).ok()?;
+        let g = u8::from_str_radix(&clean[2..4], 16).ok()?;
+        let b = u8::from_str_radix(&clean[4..6], 16).ok()?;
+        Some([r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0])
+    } else if clean.len() == 3 {
+        let r = u8::from_str_radix(&clean[0..1], 16).ok()? * 17;
+        let g = u8::from_str_radix(&clean[1..2], 16).ok()? * 17;
+        let b = u8::from_str_radix(&clean[2..3], 16).ok()? * 17;
+        Some([r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0])
+    } else {
+        None
+    }
 }
 
 /// Definition of a single wallpaper image layer before GPU allocation.
@@ -185,7 +255,10 @@ pub struct ImageRenderer {
     pipeline: Option<wgpu::RenderPipeline>,
     width: u32,
     height: u32,
-    simulated_hour: Option<f32>,
+    pub day_night_config: Option<DayNightScheduleConfig>,
+    pub simulated_hour: Option<f32>,
+    pub forced_daylight: Option<f32>,
+    pub forced_ambient_tint: Option<[f32; 3]>,
 }
 
 impl Default for ImageRenderer {
@@ -215,7 +288,10 @@ impl ImageRenderer {
             pipeline: None,
             width: 0,
             height: 0,
+            day_night_config: None,
             simulated_hour: None,
+            forced_daylight: None,
+            forced_ambient_tint: None,
         }
     }
 
@@ -227,7 +303,10 @@ impl ImageRenderer {
             pipeline: None,
             width: 0,
             height: 0,
+            day_night_config: None,
             simulated_hour: None,
+            forced_daylight: None,
+            forced_ambient_tint: None,
         }
     }
 
@@ -263,7 +342,9 @@ impl ImageRenderer {
             })
             .collect();
 
-        Ok(Self::from_layers(layers))
+        let mut renderer = Self::from_layers(layers);
+        renderer.day_night_config = image_config.day_night.clone();
+        Ok(renderer)
     }
 
     /// Convenience builder for in-memory RGBA images (useful for tests and synthetic textures).
@@ -291,7 +372,10 @@ impl ImageRenderer {
             pipeline: None,
             width: 0,
             height: 0,
+            day_night_config: None,
             simulated_hour: None,
+            forced_daylight: None,
+            forced_ambient_tint: None,
         }
     }
 
@@ -503,8 +587,16 @@ impl WallpaperRenderer for ImageRenderer {
         let pointer = ctx.pointer.unwrap_or((0.0, 0.0));
 
         let active_hour = self.simulated_hour.unwrap_or_else(local_time_of_day);
-        let daylight = daylight_factor_for_hour(active_hour);
-        let ambient_tint = ambient_tint_for_hour(active_hour);
+        let daylight = self.forced_daylight.unwrap_or_else(|| {
+            daylight_factor_with_schedule(active_hour, self.day_night_config.as_ref())
+        });
+        let ambient_tint = self.forced_ambient_tint.unwrap_or_else(|| {
+            let custom_curve = self
+                .day_night_config
+                .as_ref()
+                .and_then(|c| c.tint_curve.as_deref());
+            ambient_tint_with_curve(active_hour, custom_curve)
+        });
 
         for layer in &mut self.loaded_layers {
             // 1. Continuous Pan Animation (independent accumulation)
@@ -641,22 +733,121 @@ impl WallpaperRenderer for ImageRenderer {
             ));
         }
         if key == "hour" || key == "time_of_day" {
-            if let PropertyValue::Number(num) = value {
-                if num < 0.0 {
-                    self.simulated_hour = None;
-                } else {
-                    self.simulated_hour = Some(num.rem_euclid(24.0));
+            match value {
+                PropertyValue::Number(num) => {
+                    if num < 0.0 {
+                        self.simulated_hour = None;
+                    } else {
+                        self.simulated_hour = Some(num.rem_euclid(24.0));
+                    }
+                    return Ok(());
                 }
-                return Ok(());
+                PropertyValue::Text(s) => {
+                    if s.eq_ignore_ascii_case("auto") || s.eq_ignore_ascii_case("reset") {
+                        self.simulated_hour = None;
+                        return Ok(());
+                    }
+                    if let Some((h_str, m_str)) = s.split_once(':')
+                        && let (Ok(h), Ok(m)) =
+                            (h_str.trim().parse::<f32>(), m_str.trim().parse::<f32>())
+                    {
+                        self.simulated_hour = Some((h + m / 60.0).rem_euclid(24.0));
+                        return Ok(());
+                    }
+                    if let Ok(num) = s.trim().parse::<f32>() {
+                        if num < 0.0 {
+                            self.simulated_hour = None;
+                        } else {
+                            self.simulated_hour = Some(num.rem_euclid(24.0));
+                        }
+                        return Ok(());
+                    }
+                }
+                _ => {}
             }
             return Err(RendererError::InvalidPropertyValue(
-                "hour must be a number (0..24, or negative for system clock)".into(),
+                "hour must be a number (0..24, or negative/'auto' for system clock), or HH:MM format".into(),
+            ));
+        }
+        if key == "daylight" {
+            match value {
+                PropertyValue::Number(num) => {
+                    if num < 0.0 {
+                        self.forced_daylight = None;
+                    } else {
+                        self.forced_daylight = Some(num.clamp(0.0, 1.0));
+                    }
+                    return Ok(());
+                }
+                PropertyValue::Text(s) => {
+                    if s.eq_ignore_ascii_case("auto") || s.eq_ignore_ascii_case("reset") {
+                        self.forced_daylight = None;
+                        return Ok(());
+                    }
+                    if let Ok(num) = s.trim().parse::<f32>() {
+                        if num < 0.0 {
+                            self.forced_daylight = None;
+                        } else {
+                            self.forced_daylight = Some(num.clamp(0.0, 1.0));
+                        }
+                        return Ok(());
+                    }
+                }
+                _ => {}
+            }
+            return Err(RendererError::InvalidPropertyValue(
+                "daylight must be a number [0.0..1.0] (or negative/'auto' to reset to time-of-day)"
+                    .into(),
+            ));
+        }
+        if key == "ambient_tint" || key == "tint" {
+            match value {
+                PropertyValue::Color([r, g, b, _]) => {
+                    self.forced_ambient_tint = Some([r, g, b]);
+                    return Ok(());
+                }
+                PropertyValue::Number(num) if num < 0.0 => {
+                    self.forced_ambient_tint = None;
+                    return Ok(());
+                }
+                PropertyValue::Text(s) => {
+                    if s.eq_ignore_ascii_case("auto") || s.eq_ignore_ascii_case("reset") {
+                        self.forced_ambient_tint = None;
+                        return Ok(());
+                    }
+                    if let Some(rgb) = parse_hex_rgb(&s) {
+                        self.forced_ambient_tint = Some(rgb);
+                        return Ok(());
+                    }
+                    let parts: Vec<&str> = s.split(',').map(|p| p.trim()).collect();
+                    if parts.len() == 3
+                        && let (Ok(r), Ok(g), Ok(b)) = (
+                            parts[0].parse::<f32>(),
+                            parts[1].parse::<f32>(),
+                            parts[2].parse::<f32>(),
+                        )
+                    {
+                        self.forced_ambient_tint = Some([r, g, b]);
+                        return Ok(());
+                    }
+                }
+                _ => {}
+            }
+            return Err(RendererError::InvalidPropertyValue(
+                "ambient_tint must be a hex color (#RRGGBB), 'r,g,b' floats, or 'reset'".into(),
             ));
         }
         Err(RendererError::PropertyNotFound(key.into()))
     }
 
     fn is_animated(&self) -> bool {
+        if self.day_night_config.is_some()
+            || self.simulated_hour.is_some()
+            || self.forced_daylight.is_some()
+            || self.forced_ambient_tint.is_some()
+        {
+            return true;
+        }
         if !self.loaded_layers.is_empty() {
             self.loaded_layers.iter().any(|l| {
                 l.pan.is_some()
@@ -838,11 +1029,73 @@ mod tests {
             .expect("should set hour");
         assert_eq!(renderer.simulated_hour, Some(14.5));
 
-        // Negative resets to system time
+        // Time string "18:45"
         renderer
-            .set_property("time_of_day", PropertyValue::Number(-1.0))
+            .set_property("time_of_day", PropertyValue::Text("18:45".into()))
+            .expect("should parse time string");
+        assert_eq!(renderer.simulated_hour, Some(18.75));
+
+        // String "reset" resets to system time
+        renderer
+            .set_property("time_of_day", PropertyValue::Text("reset".into()))
             .expect("should reset hour");
         assert!(renderer.simulated_hour.is_none());
+
+        // Daylight override
+        renderer
+            .set_property("daylight", PropertyValue::Number(0.85))
+            .expect("should set daylight");
+        assert_eq!(renderer.forced_daylight, Some(0.85));
+
+        renderer
+            .set_property("daylight", PropertyValue::Text("auto".into()))
+            .expect("should reset daylight");
+        assert!(renderer.forced_daylight.is_none());
+
+        // Ambient tint override (Color and Text)
+        renderer
+            .set_property("ambient_tint", PropertyValue::Color([0.8, 0.4, 0.2, 1.0]))
+            .expect("should set tint via Color");
+        assert_eq!(renderer.forced_ambient_tint, Some([0.8, 0.4, 0.2]));
+
+        renderer
+            .set_property("ambient_tint", PropertyValue::Text("#112233".into()))
+            .expect("should set tint via hex");
+        assert!(renderer.forced_ambient_tint.is_some());
+
+        renderer
+            .set_property("ambient_tint", PropertyValue::Text("reset".into()))
+            .expect("should reset tint");
+        assert!(renderer.forced_ambient_tint.is_none());
+    }
+
+    #[test]
+    fn test_custom_schedule_and_curve() {
+        let schedule = DayNightScheduleConfig {
+            dawn_start: Some(6.0),
+            day_start: Some(7.0),
+            dusk_start: Some(19.0),
+            night_start: Some(20.0),
+            tint_curve: Some(vec![
+                TintNodeConfig {
+                    hour: 0.0,
+                    tint: [0.1, 0.1, 0.2],
+                },
+                TintNodeConfig {
+                    hour: 12.0,
+                    tint: [1.0, 1.0, 1.0],
+                },
+            ]),
+        };
+
+        // At 6.5 (mid-dawn): factor should be approx 0.707 (sin(pi/4))
+        let factor = daylight_factor_with_schedule(6.5, Some(&schedule));
+        assert!(factor > 0.65 && factor < 0.75);
+
+        // Custom tint curve at 6.0: halfway between 0.0 and 12.0
+        let tint = ambient_tint_with_curve(6.0, schedule.tint_curve.as_deref());
+        assert!((tint[0] - 0.55).abs() < 0.1);
+        assert!((tint[1] - 0.55).abs() < 0.1);
     }
 
     #[test]
@@ -854,11 +1107,15 @@ mod tests {
             let base_dir = manifest_path.parent().unwrap();
             let renderer = ImageRenderer::from_manifest(&manifest, base_dir)
                 .expect("failed to build ImageRenderer");
-            assert_eq!(renderer.layer_count(), 4);
-            assert!(renderer.layer_defs[0].image_path.exists());
-            assert!(renderer.layer_defs[1].image_path.exists());
-            assert!(renderer.layer_defs[2].image_path.exists());
-            assert!(renderer.layer_defs[3].image_path.exists());
+            let expected_count = manifest.image.as_ref().unwrap().layers.len();
+            assert_eq!(renderer.layer_count(), expected_count);
+            for l in &renderer.layer_defs {
+                assert!(
+                    l.image_path.exists(),
+                    "Layer path {:?} does not exist",
+                    l.image_path
+                );
+            }
         }
     }
 }
