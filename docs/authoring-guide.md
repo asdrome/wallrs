@@ -94,6 +94,9 @@ Composes one or more image layers in depth order. The first layer (`index = 0`) 
 type = "image"
 name = "cyber-city"
 
+[image]
+fps = 60                # Optional: Target framerate ceiling (default: 60 for animated layers)
+
 [[image.layers]]
 path = "sky.png"
 
@@ -110,6 +113,15 @@ oscillation = { speed = 1.2, amplitude = 0.02, axis = "y" }
 path = "buildings.png"
 parallax = 0.35
 ```
+
+#### Global Image Configuration (`[image]`)
+
+| Key   | Type    | Description                                                                                                                                              |
+| :---- | :------ | :------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fps` | Integer | Optional framerate target (e.g. `30` or `60`). Defaults to 60 FPS for animated layers to prevent wasting power on high-refresh displays (144Hz - 240Hz). |
+
+- **Idle Settling**: Wallpapers using cursor parallax automatically monitor mouse movement. Once the cursor stops moving and parallax interpolation settles (`< 1e-4`), `wallrs` suspends Wayland compositor frame requests, dropping CPU and GPU usage to **0.0%** until the mouse moves again.
+- **Low-Frequency Diurnal Ticks**: Wallpapers with `day_night` cycles (and without continuous `pan` or `oscillation`) only re-render at **1 Hz** to track daylight transitions instead of spinning at high framerates.
 
 #### Layer Configuration Options (`[[image.layers]]`)
 

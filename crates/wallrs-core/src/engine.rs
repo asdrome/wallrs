@@ -361,7 +361,7 @@ impl PointerHandler for EngineState {
     fn pointer_frame(
         &mut self,
         _conn: &Connection,
-        _qh: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
         _pointer: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
@@ -381,12 +381,27 @@ impl PointerHandler for EngineState {
                         ((event.position.0 as f32 / out.width as f32) * 2.0 - 1.0).clamp(-1.0, 1.0);
                     let norm_y = ((event.position.1 as f32 / out.height as f32) * 2.0 - 1.0)
                         .clamp(-1.0, 1.0);
-                    out.cursor_position = Some((norm_x, norm_y));
+                    let new_pos = Some((norm_x, norm_y));
+                    if out.cursor_position != new_pos {
+                        out.cursor_position = new_pos;
+                        if let Some(renderer) = &out.renderer
+                            && renderer.wants_pointer()
+                        {
+                            out.request_frame(qh);
+                        }
+                    }
                 }
             } else if let PointerEventKind::Leave { .. } = event.kind {
                 let surface_id = event.surface.id();
-                if let Some(out) = self.outputs.get_mut(&surface_id) {
+                if let Some(out) = self.outputs.get_mut(&surface_id)
+                    && out.cursor_position.is_some()
+                {
                     out.cursor_position = None;
+                    if let Some(renderer) = &out.renderer
+                        && renderer.wants_pointer()
+                    {
+                        out.request_frame(qh);
+                    }
                 }
             }
         }
@@ -996,10 +1011,29 @@ impl Engine {
     /// Runs the main event loop until exit is requested.
     pub fn run(&mut self) -> Result<(), EngineError> {
         tracing::info!("Entering main event loop");
+        let mut last_periodic_tick = std::time::Instant::now();
         while !self.state.exit {
             self.event_loop
-                .dispatch(None, &mut self.state)
+                .dispatch(
+                    Some(std::time::Duration::from_millis(1000)),
+                    &mut self.state,
+                )
                 .map_err(|e| EngineError::EventLoop(e.to_string()))?;
+
+            let now = std::time::Instant::now();
+            if now.duration_since(last_periodic_tick) >= std::time::Duration::from_millis(1000) {
+                last_periodic_tick = now;
+                let qh = self.state.qh.clone();
+                for out in self.state.outputs.values_mut() {
+                    if !out.is_paused()
+                        && let Some(renderer) = &out.renderer
+                        && renderer.wants_periodic_tick()
+                        && !renderer.is_animated()
+                    {
+                        out.request_frame(&qh);
+                    }
+                }
+            }
         }
         tracing::info!("Exited main event loop");
         Ok(())

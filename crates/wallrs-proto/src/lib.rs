@@ -113,6 +113,8 @@ pub struct ImageConfig {
     pub layers: Vec<ImageLayerConfig>,
     #[serde(default)]
     pub day_night: Option<DayNightScheduleConfig>,
+    #[serde(default)]
+    pub fps: Option<u32>,
 }
 
 /// Global day/night lighting schedule and custom ambient tint curve for an image wallpaper.

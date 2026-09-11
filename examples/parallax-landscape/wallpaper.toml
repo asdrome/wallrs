@@ -4,6 +4,9 @@ name = "parallax-landscape"
 author = "Antonio S. Dromundo"
 description = "Multi-layer parallax landscape with continuous drifting clouds, dynamic day/night cycle, and celestial motion"
 
+[image]
+fps = 60
+
 # 1. Daytime sky (vibrant clear blue, smoothly fades out at dusk)
 [[image.layers]]
 path = "sky-day.png"
@@ -43,9 +46,8 @@ parallax = 0.25
 pan = { speed = 0.02, axis = "x" }
 day_night = "tint"
 
-# 7. Foreground terrain (pointer parallax, gentle vertical oscillation, ambient lighting)
+# 7. Foreground terrain (pointer parallax, ambient lighting)
 [[image.layers]]
 path = "fg.png"
 parallax = 0.55
-oscillation = { speed = 0.8, amplitude = 0.008, axis = "y" }
 day_night = "tint"

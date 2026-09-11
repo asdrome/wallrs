@@ -15,12 +15,12 @@ A Wayland-native live wallpaper daemon (`wallrsd`) and CLI client (`wallctl`) wr
 - **Wayland native**: Renders to the `background` layer via `zwlr_layer_shell_v1` without X11 or Xwayland dependencies.
 - **Hardware-accelerated rendering**: Vulkan swapchains managed via `wgpu`, synchronized with display refresh rate via `wl_surface.frame()`.
 - **Multiple content backends**:
-  - **Static and parallax images**: Multi-layer compositing with cursor-driven parallax and continuous linear panning.
+  - **Static and parallax images**: Multi-layer compositing with cursor-driven parallax, continuous linear panning, periodic oscillation, dynamic diurnal day/night cycles, and automatic idle settling (0.0% CPU when mouse is still).
   - **Procedural shaders**: Native WGSL shaders and translated Shadertoy GLSL shaders with built-in uniforms (`u_time`, `u_resolution`, `u_mouse`, `u_audio_spectrum`).
   - **Video playback**: Hardware and software decoding via `libmpv` with volume, mute, and speed controls.
   - **Background audio**: Ambient audio tracks (`[audio]`) attached to image or shader wallpapers. Audio is muted by default to prevent unwanted desktop noise.
 - **Audio reactivity**: Real-time audio capture via PipeWire (`pw_stream`) with a 64-band logarithmic FFT analyzer (`RustFFT`). Captures are initiated on-demand and released when inactive.
-- **Resource management**: Automatic pause and resume on fullscreen or maximized windows (`zwlr_foreign_toplevel_management_v1`). Configurable FPS ceiling via `--fps`.
+- **Resource management**: Automatic pause and resume on fullscreen or maximized windows (`zwlr_foreign_toplevel_management_v1`). Configurable FPS ceiling via `--fps` or per-wallpaper `[image.fps]`, with intelligent on-demand frame wakeups and low-frequency diurnal updates.
 - **Fault isolation**: Each display output runs an isolated render loop protected by `catch_unwind`, preventing an error on one monitor from affecting others.
 - **Direct GPU screenshots**: Framebuffer capture straight to PNG, JPEG, or WebP via `wallctl screenshot`.
 - **Unix socket IPC**: JSON-based control protocol over Unix domain sockets via `wallctl`.
@@ -194,9 +194,11 @@ wallctl toggle-pause
 wallctl set-color "#1e1e2e"
 wallctl set-color "#ff007f" --output eDP-1
 
-# Modify runtime properties
+# Modify runtime properties (volume, speed, simulated hour, daylight factor, ambient tint)
 wallctl set-property volume 25.0
 wallctl set-property speed 1.5 --output eDP-1
+wallctl set-property hour 14:30
+wallctl set-property tint "#e06c75"
 
 # Direct GPU screenshot
 wallctl screenshot eDP-1 ~/Pictures/wallpaper_snap.png
@@ -219,26 +221,36 @@ wallctl kill
 Wallpapers are stored in directories containing a `wallpaper.toml` manifest and media assets. See the [Authoring Guide](docs/authoring-guide.md) for full specification and templates.
 
 ### 1. Parallax Image Wallpaper
-Multi-layer image with pointer-driven parallax and continuous linear pan.
+Multi-layer image with pointer-driven parallax, continuous linear pan, periodic oscillation, and dynamic day/night cycles.
 
 ```toml
 [wallpaper]
 type = "image"
 name = "cyberpunk-street"
 author = "Artist Name"
-description = "Multi-layer parallax cityscape"
+description = "Multi-layer parallax cityscape with dynamic lighting"
+
+[image]
+fps = 60
 
 [[image.layers]]
-path = "background.png"
+path = "sky.png"
+day_night = "day"
+
+[[image.layers]]
+path = "stars.png"
+day_night = "night"
 
 [[image.layers]]
 path = "midground.png"
 parallax = 0.25
 pan = { speed = 0.01, axis = "x" }
+day_night = "tint"
 
 [[image.layers]]
 path = "foreground.png"
 parallax = 0.6
+day_night = "tint"
 ```
 
 ### 2. Audio-Reactive Shader Wallpaper

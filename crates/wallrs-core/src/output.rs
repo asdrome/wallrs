@@ -41,6 +41,7 @@ pub struct OutputSurface {
     pub configured: bool,
     pub manual_paused: bool,
     pub fullscreen_paused: bool,
+    pub frame_pending: bool,
     pub max_fps: Option<u32>,
     pub start_time: Instant,
     pub last_frame_time: Option<Instant>,
@@ -79,6 +80,7 @@ impl OutputSurface {
             configured: false,
             manual_paused: false,
             fullscreen_paused: false,
+            frame_pending: false,
             max_fps,
             start_time: Instant::now(),
             last_frame_time: None,
@@ -199,6 +201,8 @@ impl OutputSurface {
         queue: &wgpu::Queue,
         qh: &QueueHandle<EngineState>,
     ) {
+        self.frame_pending = false;
+
         if !self.configured {
             return;
         }
@@ -229,11 +233,14 @@ impl OutputSurface {
             let min_interval = Duration::from_secs_f64(1.0 / fps);
             if now.duration_since(last_render) < min_interval {
                 // Skip render and re-register frame callback for next compositor vblank
-                self.layer_surface.wl_surface().frame(
-                    qh,
-                    FrameCallbackData(self.layer_surface.wl_surface().clone()),
-                );
-                self.layer_surface.commit();
+                if !self.frame_pending {
+                    self.layer_surface.wl_surface().frame(
+                        qh,
+                        FrameCallbackData(self.layer_surface.wl_surface().clone()),
+                    );
+                    self.layer_surface.commit();
+                    self.frame_pending = true;
+                }
                 return;
             }
         }
@@ -275,11 +282,12 @@ impl OutputSurface {
         // skip swapchain texture acquisition, render pass encoding, and queue presentation.
         if !is_initial_frame && !renderer.is_dirty() {
             let is_animated = renderer.is_animated();
-            if is_animated && !self.is_paused() {
+            if is_animated && !self.is_paused() && !self.frame_pending {
                 self.layer_surface.wl_surface().frame(
                     qh,
                     FrameCallbackData(self.layer_surface.wl_surface().clone()),
                 );
+                self.frame_pending = true;
             }
             self.layer_surface.commit();
             return;
@@ -292,19 +300,25 @@ impl OutputSurface {
                 if let Some(config) = &self.surface_config {
                     surface.configure(device, config);
                 }
-                self.layer_surface.wl_surface().frame(
-                    qh,
-                    FrameCallbackData(self.layer_surface.wl_surface().clone()),
-                );
-                self.layer_surface.commit();
+                if !self.frame_pending {
+                    self.layer_surface.wl_surface().frame(
+                        qh,
+                        FrameCallbackData(self.layer_surface.wl_surface().clone()),
+                    );
+                    self.layer_surface.commit();
+                    self.frame_pending = true;
+                }
                 return;
             }
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                self.layer_surface.wl_surface().frame(
-                    qh,
-                    FrameCallbackData(self.layer_surface.wl_surface().clone()),
-                );
-                self.layer_surface.commit();
+                if !self.frame_pending {
+                    self.layer_surface.wl_surface().frame(
+                        qh,
+                        FrameCallbackData(self.layer_surface.wl_surface().clone()),
+                    );
+                    self.layer_surface.commit();
+                    self.frame_pending = true;
+                }
                 return;
             }
             wgpu::CurrentSurfaceTexture::Validation => {
@@ -343,23 +357,25 @@ impl OutputSurface {
         // Static wallpapers (solid colors, static images) render their initial frame once
         // and stop requesting callbacks, dropping idle CPU and GPU usage to 0.0%.
         let is_animated = renderer.is_animated();
-        if is_animated && !self.is_paused() {
+        if is_animated && !self.is_paused() && !self.frame_pending {
             self.layer_surface.wl_surface().frame(
                 qh,
                 FrameCallbackData(self.layer_surface.wl_surface().clone()),
             );
+            self.frame_pending = true;
         }
         self.layer_surface.commit();
     }
 
     /// Requests a single frame callback from the compositor if configured and not paused.
-    pub fn request_frame(&self, qh: &QueueHandle<EngineState>) {
-        if self.configured && !self.is_paused() {
+    pub fn request_frame(&mut self, qh: &QueueHandle<EngineState>) {
+        if self.configured && !self.is_paused() && !self.frame_pending {
             self.layer_surface.wl_surface().frame(
                 qh,
                 FrameCallbackData(self.layer_surface.wl_surface().clone()),
             );
             self.layer_surface.commit();
+            self.frame_pending = true;
         }
     }
 

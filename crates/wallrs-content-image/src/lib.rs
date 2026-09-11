@@ -245,6 +245,8 @@ struct LoadedLayer {
     parallax_offset: [f32; 2],
     target_offset: [f32; 2],
     opacity: f32,
+    parallax_settled: bool,
+    last_uniform_bytes: Option<[u8; 32]>,
 }
 
 /// Image wallpaper renderer supporting layered parallax, pan loops, sinusoidal oscillation, and day/night lighting.
@@ -259,6 +261,8 @@ pub struct ImageRenderer {
     pub simulated_hour: Option<f32>,
     pub forced_daylight: Option<f32>,
     pub forced_ambient_tint: Option<[f32; 3]>,
+    pub custom_fps: Option<f64>,
+    dirty: bool,
 }
 
 impl Default for ImageRenderer {
@@ -292,6 +296,8 @@ impl ImageRenderer {
             simulated_hour: None,
             forced_daylight: None,
             forced_ambient_tint: None,
+            custom_fps: None,
+            dirty: true,
         }
     }
 
@@ -307,6 +313,8 @@ impl ImageRenderer {
             simulated_hour: None,
             forced_daylight: None,
             forced_ambient_tint: None,
+            custom_fps: None,
+            dirty: true,
         }
     }
 
@@ -344,6 +352,7 @@ impl ImageRenderer {
 
         let mut renderer = Self::from_layers(layers);
         renderer.day_night_config = image_config.day_night.clone();
+        renderer.custom_fps = image_config.fps.map(|f| f as f64);
         Ok(renderer)
     }
 
@@ -376,11 +385,20 @@ impl ImageRenderer {
             simulated_hour: None,
             forced_daylight: None,
             forced_ambient_tint: None,
+            custom_fps: None,
+            dirty: true,
         }
     }
 
     pub fn layer_count(&self) -> usize {
         self.layer_defs.len()
+    }
+
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+        for layer in &mut self.loaded_layers {
+            layer.last_uniform_bytes = None;
+        }
     }
 }
 
@@ -570,6 +588,8 @@ impl WallpaperRenderer for ImageRenderer {
                 parallax_offset: [0.0, 0.0],
                 target_offset: [0.0, 0.0],
                 opacity: def.opacity,
+                parallax_settled: def.parallax.unwrap_or(0.0).abs() <= 1e-4,
+                last_uniform_bytes: None,
             });
         }
 
@@ -578,11 +598,18 @@ impl WallpaperRenderer for ImageRenderer {
     }
 
     fn resize(&mut self, width: u32, height: u32) {
-        self.width = width;
-        self.height = height;
+        if self.width != width || self.height != height {
+            self.width = width;
+            self.height = height;
+            self.dirty = true;
+            for layer in &mut self.loaded_layers {
+                layer.last_uniform_bytes = None;
+            }
+        }
     }
 
     fn update(&mut self, ctx: &FrameContext) {
+        self.dirty = false;
         let dt = ctx.delta.as_secs_f32();
         let pointer = ctx.pointer.unwrap_or((0.0, 0.0));
 
@@ -609,7 +636,7 @@ impl WallpaperRenderer for ImageRenderer {
                 }
             }
 
-            // 2. Interactive Parallax via Pointer Position (independent smoothing)
+            // 2. Interactive Parallax via Pointer Position (independent smoothing with settling)
             if layer.parallax.abs() > 1e-4 {
                 let target_x = -pointer.0 * layer.parallax * 0.04;
                 let target_y = pointer.1 * layer.parallax * 0.04;
@@ -620,6 +647,17 @@ impl WallpaperRenderer for ImageRenderer {
                     (layer.target_offset[0] - layer.parallax_offset[0]) * lerp;
                 layer.parallax_offset[1] +=
                     (layer.target_offset[1] - layer.parallax_offset[1]) * lerp;
+
+                let diff_x = (layer.target_offset[0] - layer.parallax_offset[0]).abs();
+                let diff_y = (layer.target_offset[1] - layer.parallax_offset[1]).abs();
+                if diff_x < 1e-4 && diff_y < 1e-4 {
+                    layer.parallax_offset = layer.target_offset;
+                    layer.parallax_settled = true;
+                } else {
+                    layer.parallax_settled = false;
+                }
+            } else {
+                layer.parallax_settled = true;
             }
 
             // 3. Aspect Ratio Cover Fit
@@ -679,9 +717,13 @@ impl WallpaperRenderer for ImageRenderer {
                 None => {}
             }
 
-            // 6. Update GPU uniform buffer
+            // 6. Update GPU uniform buffer only if uniforms changed
             let raw = uniform_bytes(final_offset, scale, effective_opacity, effective_tint);
-            ctx.queue.write_buffer(&layer.uniform_buffer, 0, &raw);
+            if layer.last_uniform_bytes.as_ref() != Some(&raw) {
+                ctx.queue.write_buffer(&layer.uniform_buffer, 0, &raw);
+                layer.last_uniform_bytes = Some(raw);
+                self.dirty = true;
+            }
         }
     }
 
@@ -721,40 +763,21 @@ impl WallpaperRenderer for ImageRenderer {
     }
 
     fn set_property(&mut self, key: &str, value: PropertyValue) -> Result<(), RendererError> {
-        if key == "opacity" {
-            if let PropertyValue::Number(num) = value {
-                for layer in &mut self.loaded_layers {
-                    layer.opacity = num.clamp(0.0, 1.0);
-                }
-                return Ok(());
-            }
-            return Err(RendererError::InvalidPropertyValue(
-                "opacity must be a number".into(),
-            ));
-        }
-        if key == "hour" || key == "time_of_day" {
-            match value {
-                PropertyValue::Number(num) => {
-                    if num < 0.0 {
-                        self.simulated_hour = None;
-                    } else {
-                        self.simulated_hour = Some(num.rem_euclid(24.0));
+        let res = (|| -> Result<(), RendererError> {
+            if key == "opacity" {
+                if let PropertyValue::Number(num) = value {
+                    for layer in &mut self.loaded_layers {
+                        layer.opacity = num.clamp(0.0, 1.0);
                     }
                     return Ok(());
                 }
-                PropertyValue::Text(s) => {
-                    if s.eq_ignore_ascii_case("auto") || s.eq_ignore_ascii_case("reset") {
-                        self.simulated_hour = None;
-                        return Ok(());
-                    }
-                    if let Some((h_str, m_str)) = s.split_once(':')
-                        && let (Ok(h), Ok(m)) =
-                            (h_str.trim().parse::<f32>(), m_str.trim().parse::<f32>())
-                    {
-                        self.simulated_hour = Some((h + m / 60.0).rem_euclid(24.0));
-                        return Ok(());
-                    }
-                    if let Ok(num) = s.trim().parse::<f32>() {
+                return Err(RendererError::InvalidPropertyValue(
+                    "opacity must be a number".into(),
+                ));
+            }
+            if key == "hour" || key == "time_of_day" {
+                match value {
+                    PropertyValue::Number(num) => {
                         if num < 0.0 {
                             self.simulated_hour = None;
                         } else {
@@ -762,29 +785,36 @@ impl WallpaperRenderer for ImageRenderer {
                         }
                         return Ok(());
                     }
+                    PropertyValue::Text(s) => {
+                        if s.eq_ignore_ascii_case("auto") || s.eq_ignore_ascii_case("reset") {
+                            self.simulated_hour = None;
+                            return Ok(());
+                        }
+                        if let Some((h_str, m_str)) = s.split_once(':')
+                            && let (Ok(h), Ok(m)) =
+                                (h_str.trim().parse::<f32>(), m_str.trim().parse::<f32>())
+                        {
+                            self.simulated_hour = Some((h + m / 60.0).rem_euclid(24.0));
+                            return Ok(());
+                        }
+                        if let Ok(num) = s.trim().parse::<f32>() {
+                            if num < 0.0 {
+                                self.simulated_hour = None;
+                            } else {
+                                self.simulated_hour = Some(num.rem_euclid(24.0));
+                            }
+                            return Ok(());
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
-            }
-            return Err(RendererError::InvalidPropertyValue(
+                return Err(RendererError::InvalidPropertyValue(
                 "hour must be a number (0..24, or negative/'auto' for system clock), or HH:MM format".into(),
             ));
-        }
-        if key == "daylight" {
-            match value {
-                PropertyValue::Number(num) => {
-                    if num < 0.0 {
-                        self.forced_daylight = None;
-                    } else {
-                        self.forced_daylight = Some(num.clamp(0.0, 1.0));
-                    }
-                    return Ok(());
-                }
-                PropertyValue::Text(s) => {
-                    if s.eq_ignore_ascii_case("auto") || s.eq_ignore_ascii_case("reset") {
-                        self.forced_daylight = None;
-                        return Ok(());
-                    }
-                    if let Ok(num) = s.trim().parse::<f32>() {
+            }
+            if key == "daylight" {
+                match value {
+                    PropertyValue::Number(num) => {
                         if num < 0.0 {
                             self.forced_daylight = None;
                         } else {
@@ -792,77 +822,118 @@ impl WallpaperRenderer for ImageRenderer {
                         }
                         return Ok(());
                     }
+                    PropertyValue::Text(s) => {
+                        if s.eq_ignore_ascii_case("auto") || s.eq_ignore_ascii_case("reset") {
+                            self.forced_daylight = None;
+                            return Ok(());
+                        }
+                        if let Ok(num) = s.trim().parse::<f32>() {
+                            if num < 0.0 {
+                                self.forced_daylight = None;
+                            } else {
+                                self.forced_daylight = Some(num.clamp(0.0, 1.0));
+                            }
+                            return Ok(());
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
-            }
-            return Err(RendererError::InvalidPropertyValue(
+                return Err(RendererError::InvalidPropertyValue(
                 "daylight must be a number [0.0..1.0] (or negative/'auto' to reset to time-of-day)"
                     .into(),
             ));
-        }
-        if key == "ambient_tint" || key == "tint" {
-            match value {
-                PropertyValue::Color([r, g, b, _]) => {
-                    self.forced_ambient_tint = Some([r, g, b]);
-                    return Ok(());
-                }
-                PropertyValue::Number(num) if num < 0.0 => {
-                    self.forced_ambient_tint = None;
-                    return Ok(());
-                }
-                PropertyValue::Text(s) => {
-                    if s.eq_ignore_ascii_case("auto") || s.eq_ignore_ascii_case("reset") {
-                        self.forced_ambient_tint = None;
-                        return Ok(());
-                    }
-                    if let Some(rgb) = parse_hex_rgb(&s) {
-                        self.forced_ambient_tint = Some(rgb);
-                        return Ok(());
-                    }
-                    let parts: Vec<&str> = s.split(',').map(|p| p.trim()).collect();
-                    if parts.len() == 3
-                        && let (Ok(r), Ok(g), Ok(b)) = (
-                            parts[0].parse::<f32>(),
-                            parts[1].parse::<f32>(),
-                            parts[2].parse::<f32>(),
-                        )
-                    {
+            }
+            if key == "ambient_tint" || key == "tint" {
+                match value {
+                    PropertyValue::Color([r, g, b, _]) => {
                         self.forced_ambient_tint = Some([r, g, b]);
                         return Ok(());
                     }
+                    PropertyValue::Number(num) if num < 0.0 => {
+                        self.forced_ambient_tint = None;
+                        return Ok(());
+                    }
+                    PropertyValue::Text(s) => {
+                        if s.eq_ignore_ascii_case("auto") || s.eq_ignore_ascii_case("reset") {
+                            self.forced_ambient_tint = None;
+                            return Ok(());
+                        }
+                        if let Some(rgb) = parse_hex_rgb(&s) {
+                            self.forced_ambient_tint = Some(rgb);
+                            return Ok(());
+                        }
+                        let parts: Vec<&str> = s.split(',').map(|p| p.trim()).collect();
+                        if parts.len() == 3
+                            && let (Ok(r), Ok(g), Ok(b)) = (
+                                parts[0].parse::<f32>(),
+                                parts[1].parse::<f32>(),
+                                parts[2].parse::<f32>(),
+                            )
+                        {
+                            self.forced_ambient_tint = Some([r, g, b]);
+                            return Ok(());
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
+                return Err(RendererError::InvalidPropertyValue(
+                    "ambient_tint must be a hex color (#RRGGBB), 'r,g,b' floats, or 'reset'".into(),
+                ));
             }
-            return Err(RendererError::InvalidPropertyValue(
-                "ambient_tint must be a hex color (#RRGGBB), 'r,g,b' floats, or 'reset'".into(),
-            ));
+            Err(RendererError::PropertyNotFound(key.into()))
+        })();
+        if res.is_ok() {
+            self.mark_dirty();
         }
-        Err(RendererError::PropertyNotFound(key.into()))
+        res
     }
 
     fn is_animated(&self) -> bool {
-        if self.day_night_config.is_some()
-            || self.simulated_hour.is_some()
-            || self.forced_daylight.is_some()
-            || self.forced_ambient_tint.is_some()
-        {
+        // Continuous animations (pan or oscillation) always require ongoing frame updates
+        let has_continuous = self
+            .loaded_layers
+            .iter()
+            .any(|l| l.pan.is_some() || l.oscillation.is_some());
+        if has_continuous {
             return true;
         }
-        if !self.loaded_layers.is_empty() {
-            self.loaded_layers.iter().any(|l| {
-                l.pan.is_some()
-                    || l.oscillation.is_some()
-                    || l.day_night.is_some()
-                    || l.parallax.abs() > 1e-4
-            })
-        } else {
-            self.layer_defs.iter().any(|l| {
-                l.pan.is_some()
-                    || l.oscillation.is_some()
-                    || l.day_night.is_some()
-                    || l.parallax.unwrap_or(0.0).abs() > 1e-4
-            })
+
+        // Parallax requires continuous frames while smoothing towards target; drops to false once settled
+        let has_parallax_animating = self
+            .loaded_layers
+            .iter()
+            .any(|l| l.parallax.abs() > 1e-4 && !l.parallax_settled);
+        if has_parallax_animating {
+            return true;
         }
+
+        // Fallback for layer_defs before GPU initialization
+        if self.loaded_layers.is_empty() {
+            return self.layer_defs.iter().any(|l| {
+                l.pan.is_some() || l.oscillation.is_some() || l.parallax.unwrap_or(0.0).abs() > 1e-4
+            });
+        }
+
+        false
+    }
+
+    fn target_fps(&self) -> Option<f64> {
+        if let Some(custom) = self.custom_fps {
+            return Some(custom);
+        }
+        // Cap animated image wallpapers to 60.0 FPS by default to avoid power waste on 144Hz-240Hz screens
+        let has_motion = self
+            .loaded_layers
+            .iter()
+            .any(|l| l.pan.is_some() || l.oscillation.is_some() || l.parallax.abs() > 1e-4)
+            || self.layer_defs.iter().any(|l| {
+                l.pan.is_some() || l.oscillation.is_some() || l.parallax.unwrap_or(0.0).abs() > 1e-4
+            });
+        if has_motion { Some(60.0) } else { None }
+    }
+
+    fn is_dirty(&self) -> bool {
+        self.dirty
     }
 
     fn wants_pointer(&self) -> bool {
@@ -873,6 +944,15 @@ impl WallpaperRenderer for ImageRenderer {
                 .iter()
                 .any(|l| l.parallax.unwrap_or(0.0).abs() > 1e-4)
         }
+    }
+
+    fn wants_periodic_tick(&self) -> bool {
+        self.day_night_config.is_some()
+            || self.simulated_hour.is_some()
+            || self.forced_daylight.is_some()
+            || self.forced_ambient_tint.is_some()
+            || self.loaded_layers.iter().any(|l| l.day_night.is_some())
+            || self.layer_defs.iter().any(|l| l.day_night.is_some())
     }
 }
 
@@ -969,8 +1049,9 @@ mod tests {
             Some([0.8, 0.9, 1.0]),
         );
         let renderer_dn = ImageRenderer::from_memory_layers(vec![layer1, layer_dn]);
-        assert_eq!(renderer_dn.layer_count(), 2);
-        assert!(renderer_dn.is_animated());
+        // Day/night layers without pan/oscillation require periodic low-frequency ticks, not high-frequency animation
+        assert!(!renderer_dn.is_animated());
+        assert!(renderer_dn.wants_periodic_tick());
     }
 
     #[test]
@@ -1117,5 +1198,26 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_target_fps_and_settling() {
+        let static_layer = (
+            2, 2, vec![0; 16], None, None, None, None, None,
+        );
+        let static_renderer = ImageRenderer::from_memory_layers(vec![static_layer.clone()]);
+        assert_eq!(static_renderer.target_fps(), None);
+        assert!(!static_renderer.is_animated());
+
+        let parallax_layer = (
+            2, 2, vec![0; 16], Some(0.5), None, None, None, None,
+        );
+        let mut motion_renderer = ImageRenderer::from_memory_layers(vec![static_layer, parallax_layer]);
+        assert_eq!(motion_renderer.target_fps(), Some(60.0));
+        assert!(motion_renderer.is_animated());
+
+        // Custom FPS override
+        motion_renderer.custom_fps = Some(30.0);
+        assert_eq!(motion_renderer.target_fps(), Some(30.0));
     }
 }

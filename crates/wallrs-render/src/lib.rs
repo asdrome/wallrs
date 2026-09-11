@@ -93,6 +93,12 @@ pub trait WallpaperRenderer: Send {
         false
     }
 
+    /// Returns whether this renderer desires periodic low-frequency wakeup ticks (e.g. 1 Hz)
+    /// to update time-dependent visuals like day/night cycles when no high-frequency animations are active.
+    fn wants_periodic_tick(&self) -> bool {
+        false
+    }
+
     /// Tears down any allocated resources.
     fn teardown(&mut self) {}
 }
