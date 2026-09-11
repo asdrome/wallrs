@@ -38,6 +38,10 @@ struct Args {
     #[arg(long)]
     state_file: Option<std::path::PathBuf>,
 
+    /// Wayland layer-shell surface layer: auto (default, bottom on KDE, background on others), background, or bottom
+    #[arg(short = 'l', long, default_value = "auto")]
+    layer: String,
+
     /// Legacy flag retained for backward compatibility (pause on maximized is now default)
     #[arg(long, hide = true)]
     pause_on_maximized: bool,
@@ -46,7 +50,23 @@ struct Args {
 fn parse_color(s: &str) -> Result<[f32; 4], String> {
     let s = s.trim();
     if let Some(hex) = s.strip_prefix('#').or(Some(s)) {
-        if hex.len() == 6 {
+        if hex.len() == 3 {
+            let r = u8::from_str_radix(&hex[0..1], 16).map_err(|e| e.to_string())? * 17;
+            let g = u8::from_str_radix(&hex[1..2], 16).map_err(|e| e.to_string())? * 17;
+            let b = u8::from_str_radix(&hex[2..3], 16).map_err(|e| e.to_string())? * 17;
+            return Ok([r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]);
+        } else if hex.len() == 4 {
+            let r = u8::from_str_radix(&hex[0..1], 16).map_err(|e| e.to_string())? * 17;
+            let g = u8::from_str_radix(&hex[1..2], 16).map_err(|e| e.to_string())? * 17;
+            let b = u8::from_str_radix(&hex[2..3], 16).map_err(|e| e.to_string())? * 17;
+            let a = u8::from_str_radix(&hex[3..4], 16).map_err(|e| e.to_string())? * 17;
+            return Ok([
+                r as f32 / 255.0,
+                g as f32 / 255.0,
+                b as f32 / 255.0,
+                a as f32 / 255.0,
+            ]);
+        } else if hex.len() == 6 {
             let r = u8::from_str_radix(&hex[0..2], 16).map_err(|e| e.to_string())? as f32 / 255.0;
             let g = u8::from_str_radix(&hex[2..4], 16).map_err(|e| e.to_string())? as f32 / 255.0;
             let b = u8::from_str_radix(&hex[4..6], 16).map_err(|e| e.to_string())? as f32 / 255.0;
@@ -88,12 +108,12 @@ fn parse_color(s: &str) -> Result<[f32; 4], String> {
 }
 
 fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+    let max_level = std::env::var("RUST_LOG")
+        .ok()
+        .and_then(|s| s.parse::<tracing::Level>().ok())
+        .unwrap_or(tracing::Level::INFO);
+
+    tracing_subscriber::fmt().with_max_level(max_level).init();
 
     let args = Args::parse();
     let initial_color = match parse_color(&args.color) {
@@ -106,12 +126,23 @@ fn main() {
 
     let pause_on_maximized = !args.no_pause_on_maximized;
 
+    let layer = match args.layer.to_lowercase().as_str() {
+        "auto" => wallrs_core::ShellLayer::Auto,
+        "background" | "bg" => wallrs_core::ShellLayer::Background,
+        "bottom" | "b" => wallrs_core::ShellLayer::Bottom,
+        other => {
+            tracing::error!("Invalid layer '{other}'. Expected 'auto', 'background', or 'bottom'");
+            std::process::exit(1);
+        }
+    };
+
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
         color = ?initial_color,
         fps = ?args.fps,
         fullscreen_pause = !args.no_fullscreen_pause,
         pause_on_maximized,
+        layer = ?layer,
         "Initializing wallrsd live wallpaper daemon"
     );
 
@@ -123,6 +154,7 @@ fn main() {
         allow_audio: args.allow_audio,
         restore_state: !args.no_restore,
         state_path: args.state_file,
+        layer,
     };
 
     let mut engine = match Engine::with_config(
@@ -162,6 +194,15 @@ mod tests {
 
     #[test]
     fn test_parse_color() {
+        let c3 = parse_color("#f00").unwrap();
+        assert_eq!(c3, [1.0, 0.0, 0.0, 1.0]);
+
+        let c4 = parse_color("#f008").unwrap();
+        assert_eq!(c4[0], 1.0);
+        assert_eq!(c4[1], 0.0);
+        assert_eq!(c4[2], 0.0);
+        assert!((c4[3] - 0.5333).abs() < 1e-2);
+
         let c6 = parse_color("#ff0000").unwrap();
         assert!((c6[0] - 1.0).abs() < 1e-4);
         assert!((c6[1] - 0.0).abs() < 1e-4);
@@ -193,15 +234,19 @@ mod tests {
         assert!(args.no_pause_on_maximized);
         assert!(!args.no_restore);
         assert!(args.state_file.is_none());
+        assert_eq!(args.layer, "auto");
 
         let args2 = Args::try_parse_from([
             "wallrsd",
             "--no-restore",
             "--state-file",
             "/tmp/custom_state.json",
+            "--layer",
+            "bottom",
         ])
         .unwrap();
         assert!(args2.no_restore);
+        assert_eq!(args2.layer, "bottom");
         assert_eq!(
             args2.state_file,
             Some(std::path::PathBuf::from("/tmp/custom_state.json"))

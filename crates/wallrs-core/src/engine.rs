@@ -1,3 +1,7 @@
+use smithay_client_toolkit::reexports::protocols::wp::cursor_shape::v1::client::{
+    wp_cursor_shape_device_v1::{Shape, WpCursorShapeDeviceV1},
+    wp_cursor_shape_manager_v1::WpCursorShapeManagerV1,
+};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_dispatch2, delegate_registry,
@@ -25,8 +29,9 @@ use wallrs_proto::{OutputSelector, PropertyValue, Response};
 use wayland_client::{
     Connection, Dispatch, Proxy, QueueHandle,
     backend::ObjectId,
+    delegate_noop,
     globals::registry_queue_init,
-    protocol::{wl_output, wl_pointer, wl_seat, wl_surface},
+    protocol::{wl_output, wl_pointer, wl_region, wl_seat, wl_surface},
 };
 use wayland_protocols_wlr::foreign_toplevel::v1::client::{
     zwlr_foreign_toplevel_handle_v1::{self, ZwlrForeignToplevelHandleV1},
@@ -85,8 +90,11 @@ pub struct EngineState {
     pub output_state: OutputState,
     pub seat_state: SeatState,
     pub pointers: Vec<wl_pointer::WlPointer>,
+    pub cursor_shape_mgr: Option<WpCursorShapeManagerV1>,
+    pub cursor_shape_devices: Vec<WpCursorShapeDeviceV1>,
     pub compositor_state: CompositorState,
     pub layer_shell: LayerShell,
+    pub layer: Layer,
     pub wgpu_instance: wgpu::Instance,
     pub wgpu_adapter: wgpu::Adapter,
     pub wgpu_device: wgpu::Device,
@@ -175,7 +183,7 @@ impl OutputHandler for EngineState {
         let layer_surface = self.layer_shell.create_layer_surface(
             qh,
             surface,
-            Layer::Background,
+            self.layer,
             Some("desktop"),
             Some(&output),
         );
@@ -184,6 +192,12 @@ impl OutputHandler for EngineState {
         layer_surface.set_exclusive_zone(-1);
         layer_surface.set_keyboard_interactivity(KeyboardInteractivity::None);
         layer_surface.set_size(0, 0);
+
+        // Apply an empty input region by default so desktop clicks and events pass through
+        let region = self.compositor_state.wl_compositor().create_region(qh, ());
+        layer_surface.wl_surface().set_input_region(Some(&region));
+        region.destroy();
+
         layer_surface.commit();
 
         let surface_id = layer_surface.wl_surface().id();
@@ -272,9 +286,14 @@ impl LayerShellHandler for EngineState {
                 device: &self.wgpu_device,
                 queue: &self.wgpu_queue,
             };
-            if let Err(e) =
-                output.handle_configure(configure.new_size, &gpu, conn, qh, &*self.renderer_factory)
-            {
+            if let Err(e) = output.handle_configure(
+                configure.new_size,
+                &gpu,
+                conn,
+                qh,
+                &*self.renderer_factory,
+                self.compositor_state.wl_compositor(),
+            ) {
                 tracing::error!(output = ?output.name, error = ?e, "Failed configuring output surface");
             }
         }
@@ -299,6 +318,10 @@ impl SeatHandler for EngineState {
 
     fn new_seat(&mut self, _conn: &Connection, qh: &QueueHandle<Self>, seat: wl_seat::WlSeat) {
         if let Ok(pointer) = self.seat_state.get_pointer(qh, &seat) {
+            if let Some(mgr) = &self.cursor_shape_mgr {
+                self.cursor_shape_devices
+                    .push(mgr.get_pointer(&pointer, qh, ()));
+            }
             self.pointers.push(pointer);
         }
     }
@@ -313,6 +336,10 @@ impl SeatHandler for EngineState {
         if capability == Capability::Pointer
             && let Ok(pointer) = self.seat_state.get_pointer(qh, &seat)
         {
+            if let Some(mgr) = &self.cursor_shape_mgr {
+                self.cursor_shape_devices
+                    .push(mgr.get_pointer(&pointer, qh, ()));
+            }
             self.pointers.push(pointer);
         }
     }
@@ -334,11 +361,16 @@ impl PointerHandler for EngineState {
     fn pointer_frame(
         &mut self,
         _conn: &Connection,
-        _qh: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
         _pointer: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
         for event in events {
+            if let PointerEventKind::Enter { serial } = event.kind {
+                for shape_device in &self.cursor_shape_devices {
+                    shape_device.set_shape(serial, Shape::Default);
+                }
+            }
             if let PointerEventKind::Motion { .. } | PointerEventKind::Enter { .. } = event.kind {
                 let surface_id = event.surface.id();
                 if let Some(out) = self.outputs.get_mut(&surface_id)
@@ -349,12 +381,27 @@ impl PointerHandler for EngineState {
                         ((event.position.0 as f32 / out.width as f32) * 2.0 - 1.0).clamp(-1.0, 1.0);
                     let norm_y = ((event.position.1 as f32 / out.height as f32) * 2.0 - 1.0)
                         .clamp(-1.0, 1.0);
-                    out.cursor_position = Some((norm_x, norm_y));
+                    let new_pos = Some((norm_x, norm_y));
+                    if out.cursor_position != new_pos {
+                        out.cursor_position = new_pos;
+                        if let Some(renderer) = &out.renderer
+                            && renderer.wants_pointer()
+                        {
+                            out.request_frame(qh);
+                        }
+                    }
                 }
             } else if let PointerEventKind::Leave { .. } = event.kind {
                 let surface_id = event.surface.id();
-                if let Some(out) = self.outputs.get_mut(&surface_id) {
+                if let Some(out) = self.outputs.get_mut(&surface_id)
+                    && out.cursor_position.is_some()
+                {
                     out.cursor_position = None;
+                    if let Some(renderer) = &out.renderer
+                        && renderer.wants_pointer()
+                    {
+                        out.request_frame(qh);
+                    }
                 }
             }
         }
@@ -370,6 +417,9 @@ impl ProvidesRegistryState for EngineState {
 
 delegate_registry!(EngineState);
 delegate_dispatch2!(EngineState);
+delegate_noop!(EngineState: ignore wl_region::WlRegion);
+delegate_noop!(EngineState: ignore WpCursorShapeManagerV1);
+delegate_noop!(EngineState: ignore WpCursorShapeDeviceV1);
 
 impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for EngineState {
     fn event(
@@ -742,7 +792,12 @@ impl EngineState {
                         queue: &self.wgpu_queue,
                     };
                     let solid = Box::new(wallrs_render::SolidColorRenderer::new(color));
-                    let _ = out.set_renderer(solid, &gpu, &self.qh);
+                    let _ = out.set_renderer(
+                        solid,
+                        &gpu,
+                        &self.qh,
+                        self.compositor_state.wl_compositor(),
+                    );
                     out.current_wallpaper = None;
                     out.audio_track = None;
                     out.audio_handle = None;
@@ -808,6 +863,9 @@ impl Engine {
             crate::state::StateSnapshot::default()
         };
 
+        let layer = config.layer.resolve();
+        tracing::info!(layer = ?layer, "Using Wayland layer-shell surface layer");
+
         tracing::info!("Connecting to Wayland display");
         let conn = Connection::connect_to_env()
             .map_err(|e| EngineError::WaylandConnection(e.to_string()))?;
@@ -858,10 +916,18 @@ impl Engine {
             None
         };
 
+        let cursor_shape_mgr = registry_state
+            .bind_one::<WpCursorShapeManagerV1, EngineState, ()>(&qh, 1..=1, ())
+            .ok();
+
         let mut seat_state = SeatState::new(&globals, &qh);
         let mut pointers = Vec::new();
+        let mut cursor_shape_devices = Vec::new();
         for seat in seat_state.seats() {
             if let Ok(pointer) = seat_state.get_pointer(&qh, &seat) {
+                if let Some(mgr) = &cursor_shape_mgr {
+                    cursor_shape_devices.push(mgr.get_pointer(&pointer, &qh, ()));
+                }
                 pointers.push(pointer);
             }
         }
@@ -909,8 +975,11 @@ impl Engine {
             output_state,
             seat_state,
             pointers,
+            cursor_shape_mgr,
+            cursor_shape_devices,
             compositor_state,
             layer_shell,
+            layer,
             wgpu_instance,
             wgpu_adapter,
             wgpu_device,
@@ -942,10 +1011,28 @@ impl Engine {
     /// Runs the main event loop until exit is requested.
     pub fn run(&mut self) -> Result<(), EngineError> {
         tracing::info!("Entering main event loop");
+        let mut last_periodic_tick = std::time::Instant::now();
         while !self.state.exit {
+            let timeout =
+                std::time::Duration::from_millis(1000).saturating_sub(last_periodic_tick.elapsed());
             self.event_loop
-                .dispatch(None, &mut self.state)
+                .dispatch(Some(timeout), &mut self.state)
                 .map_err(|e| EngineError::EventLoop(e.to_string()))?;
+
+            let now = std::time::Instant::now();
+            if now.duration_since(last_periodic_tick) >= std::time::Duration::from_millis(1000) {
+                last_periodic_tick = now;
+                let qh = self.state.qh.clone();
+                for out in self.state.outputs.values_mut() {
+                    if !out.is_paused()
+                        && let Some(renderer) = &out.renderer
+                        && renderer.wants_periodic_tick()
+                        && !renderer.is_animated()
+                    {
+                        out.request_frame(&qh);
+                    }
+                }
+            }
         }
         tracing::info!("Exited main event loop");
         Ok(())

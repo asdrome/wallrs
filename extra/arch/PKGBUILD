@@ -1,6 +1,6 @@
 # Maintainer: Antonio S. Dromundo <sebastiandromundo@outlook.com>
 pkgname=wallrs
-pkgver=1.1.0
+pkgver=1.1.4
 pkgrel=1
 pkgdesc="High-performance, Wayland-native live wallpaper daemon and CLI client written in Rust"
 arch=('x86_64' 'aarch64')
@@ -45,6 +45,8 @@ package() {
     install -Dm644 extra/systemd/wallrs-auto-pause.service "$pkgdir/usr/lib/systemd/user/wallrs-auto-pause.service"
     install -d "$pkgdir/usr/share/$pkgname/contrib"
     install -m755 contrib/*.sh "$pkgdir/usr/share/$pkgname/contrib/"
+    install -d "$pkgdir/usr/share/$pkgname/examples"
+    cp -r examples/* "$pkgdir/usr/share/$pkgname/examples/"
     install -Dm644 extra/metainfo/com.asdrome.wallrs.metainfo.xml "$pkgdir/usr/share/metainfo/com.asdrome.wallrs.metainfo.xml"
     install -Dm644 LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
     install -Dm644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"

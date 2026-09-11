@@ -63,6 +63,8 @@ pub struct VideoRenderer {
     volume: f64,
     width: u32,
     height: u32,
+    render_width: u32,
+    render_height: u32,
     cpu_buffer: Vec<u8>,
     texture: Option<wgpu::Texture>,
     texture_view: Option<wgpu::TextureView>,
@@ -71,6 +73,9 @@ pub struct VideoRenderer {
     bind_group: Option<wgpu::BindGroup>,
     pipeline: Option<wgpu::RenderPipeline>,
     needs_initial_load: bool,
+    dirty: bool,
+    cached_fps: Option<f64>,
+    is_paused: bool,
 }
 
 // Safety: VideoRenderer owns the mpv instance and render context, which are accessed
@@ -94,6 +99,8 @@ impl VideoRenderer {
             volume: 0.0,
             width: 0,
             height: 0,
+            render_width: 0,
+            render_height: 0,
             cpu_buffer: Vec::new(),
             texture: None,
             texture_view: None,
@@ -102,6 +109,9 @@ impl VideoRenderer {
             bind_group: None,
             pipeline: None,
             needs_initial_load: true,
+            dirty: true,
+            cached_fps: None,
+            is_paused: false,
         }
     }
 
@@ -136,9 +146,12 @@ impl VideoRenderer {
             let _ = mpv.set_property("loop-file", "inf");
         }
         let _ = mpv.set_property("volume", volume);
-        if volume <= 0.0 {
-            let _ = mpv.set_property("mute", true);
-        }
+        // Always initialize MPV in a muted state with no audio threads (ao = "null").
+        // Unmuting is explicitly triggered by daemon policy or CLI flags.
+        let _ = mpv.set_property("mute", true);
+        let _ = mpv.set_property("ao", "null");
+        let _ = mpv.set_property("sws-fast", "yes");
+        let _ = mpv.set_property("vd-lavc-threads", 4);
 
         // Initialize MPV software render context
         let api_type = CString::new("sw").unwrap();
@@ -180,6 +193,8 @@ impl VideoRenderer {
             volume,
             width: 0,
             height: 0,
+            render_width: 0,
+            render_height: 0,
             cpu_buffer: Vec::new(),
             texture: None,
             texture_view: None,
@@ -188,7 +203,31 @@ impl VideoRenderer {
             bind_group: None,
             pipeline: None,
             needs_initial_load: true,
+            dirty: true,
+            cached_fps: None,
+            is_paused: false,
         })
+    }
+
+    /// Queries the container or video filter FPS from MPV if not already detected.
+    pub fn detect_fps(&mut self) -> Option<f64> {
+        if let Some(fps) = self.cached_fps {
+            return Some(fps);
+        }
+        if let Some(mpv) = &self.mpv {
+            let fps = mpv
+                .get_property::<f64>("container-fps")
+                .ok()
+                .or_else(|| mpv.get_property::<f64>("estimated-vf-fps").ok());
+            if let Some(f) = fps
+                && (1.0..=240.0).contains(&f)
+                && f.is_finite()
+            {
+                self.cached_fps = Some(f);
+                return Some(f);
+            }
+        }
+        None
     }
 
     pub fn video_path(&self) -> Option<&Path> {
@@ -291,13 +330,16 @@ impl WallpaperRenderer for VideoRenderer {
         if self.width != width || self.height != height {
             self.width = width;
             self.height = height;
+            self.render_width = width;
+            self.render_height = height;
             let needed_bytes = (width as usize) * (height as usize) * 4;
             self.cpu_buffer.resize(needed_bytes, 0);
-            // Invalidate GPU texture so update() rebuilds it with new dimensions
+            // Invalidate GPU texture so update() rebuilds it with optimal dimensions
             self.texture = None;
             self.texture_view = None;
             self.bind_group = None;
             self.needs_initial_load = true;
+            self.dirty = true;
         }
     }
 
@@ -318,8 +360,45 @@ impl WallpaperRenderer for VideoRenderer {
             return;
         }
 
-        // Recreate WGPU texture & bind group if invalidated by resize
-        if self.texture.is_none() {
+        // Detect video framerate if not cached yet
+        if self.cached_fps.is_none() {
+            let _ = self.detect_fps();
+        }
+
+        // Determine optimal render dimensions to avoid CPU upscaling to 4K on high-DPI displays.
+        // If native video resolution is smaller than display and matches aspect ratio, render at native video size.
+        let (video_w, video_h) = self
+            .mpv
+            .as_ref()
+            .and_then(|mpv| {
+                let w = mpv.get_property::<i64>("video-params/w").ok()? as u32;
+                let h = mpv.get_property::<i64>("video-params/h").ok()? as u32;
+                if w > 0 && h > 0 { Some((w, h)) } else { None }
+            })
+            .unwrap_or((0, 0));
+
+        let (target_w, target_h) = if video_w > 0 && video_h > 0 {
+            let video_aspect = video_w as f64 / video_h as f64;
+            let display_aspect = self.width as f64 / self.height as f64;
+            if (video_aspect - display_aspect).abs() < 0.02
+                && video_w < self.width
+                && video_h < self.height
+            {
+                (video_w, video_h)
+            } else {
+                (self.width, self.height)
+            }
+        } else {
+            (self.width, self.height)
+        };
+
+        if self.render_width != target_w || self.render_height != target_h || self.texture.is_none()
+        {
+            self.render_width = target_w;
+            self.render_height = target_h;
+            let needed_bytes = (target_w as usize) * (target_h as usize) * 4;
+            self.cpu_buffer.resize(needed_bytes, 0);
+
             let Some(bgl) = &self.bind_group_layout else {
                 return;
             };
@@ -330,8 +409,8 @@ impl WallpaperRenderer for VideoRenderer {
             let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("video_frame_texture"),
                 size: wgpu::Extent3d {
-                    width: self.width,
-                    height: self.height,
+                    width: target_w,
+                    height: target_h,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
@@ -362,6 +441,7 @@ impl WallpaperRenderer for VideoRenderer {
             self.texture = Some(texture);
             self.texture_view = Some(view);
             self.bind_group = Some(bind_group);
+            self.needs_initial_load = true;
         }
 
         // Query MPV software renderer for frame availability
@@ -374,9 +454,10 @@ impl WallpaperRenderer for VideoRenderer {
             if has_new_frame {
                 self.needs_initial_load = false;
 
-                let mut size: [std::os::raw::c_int; 2] = [self.width as _, self.height as _];
+                let mut size: [std::os::raw::c_int; 2] =
+                    [self.render_width as _, self.render_height as _];
                 let fmt = CString::new("rgba").unwrap();
-                let mut stride: usize = self.width as usize * 4;
+                let mut stride: usize = self.render_width as usize * 4;
 
                 let mut render_params = [
                     libmpv2_sys::mpv_render_param {
@@ -421,21 +502,23 @@ impl WallpaperRenderer for VideoRenderer {
                         &self.cpu_buffer,
                         wgpu::TexelCopyBufferLayout {
                             offset: 0,
-                            bytes_per_row: Some(self.width * 4),
-                            rows_per_image: Some(self.height),
+                            bytes_per_row: Some(self.render_width * 4),
+                            rows_per_image: Some(self.render_height),
                         },
                         wgpu::Extent3d {
-                            width: self.width,
-                            height: self.height,
+                            width: self.render_width,
+                            height: self.render_height,
                             depth_or_array_layers: 1,
                         },
                     );
+                    self.dirty = true;
                 }
             }
         }
     }
 
     fn render(&mut self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
+        self.dirty = false;
         let (Some(pipeline), Some(bind_group)) = (&self.pipeline, &self.bind_group) else {
             return;
         };
@@ -463,31 +546,58 @@ impl WallpaperRenderer for VideoRenderer {
     }
 
     fn set_property(&mut self, key: &str, value: PropertyValue) -> Result<(), RendererError> {
-        let Some(mpv) = &self.mpv else {
-            return Ok(());
-        };
-
         match (key, value) {
             ("pause", PropertyValue::Bool(b)) => {
-                let _ = mpv.set_property("pause", b);
+                self.is_paused = b;
+                if let Some(mpv) = &self.mpv {
+                    let _ = mpv.set_property("pause", b);
+                }
+                if !b {
+                    self.dirty = true;
+                }
             }
             ("play", PropertyValue::Bool(b)) => {
-                let _ = mpv.set_property("pause", !b);
+                self.is_paused = !b;
+                if let Some(mpv) = &self.mpv {
+                    let _ = mpv.set_property("pause", !b);
+                }
+                if b {
+                    self.dirty = true;
+                }
             }
             ("mute", PropertyValue::Bool(b)) => {
-                let _ = mpv.set_property("mute", b);
+                if let Some(mpv) = &self.mpv {
+                    let _ = mpv.set_property("mute", b);
+                    if b {
+                        let _ = mpv.set_property("ao", "null");
+                    } else if self.volume > 0.0 {
+                        let _ = mpv.set_property("ao", "auto");
+                    }
+                }
             }
             ("volume", PropertyValue::Number(n)) => {
                 self.volume = n as f64;
-                let _ = mpv.set_property("volume", self.volume);
-                let _ = mpv.set_property("mute", self.volume <= 0.0);
+                if let Some(mpv) = &self.mpv {
+                    let _ = mpv.set_property("volume", self.volume);
+                    let _ = mpv.set_property("mute", self.volume <= 0.0);
+                    if self.volume <= 0.0 {
+                        let _ = mpv.set_property("ao", "null");
+                    } else {
+                        let _ = mpv.set_property("ao", "auto");
+                    }
+                }
             }
             ("seek", PropertyValue::Number(n)) => {
-                let _ = mpv.command("seek", &[&n.to_string(), "relative"]);
+                self.dirty = true;
+                if let Some(mpv) = &self.mpv {
+                    let _ = mpv.command("seek", &[&n.to_string(), "relative"]);
+                }
             }
             ("loop", PropertyValue::Bool(b)) => {
                 self.loop_file = b;
-                let _ = mpv.set_property("loop-file", if b { "inf" } else { "no" });
+                if let Some(mpv) = &self.mpv {
+                    let _ = mpv.set_property("loop-file", if b { "inf" } else { "no" });
+                }
             }
             (k, _) => {
                 return Err(RendererError::PropertyNotFound(k.to_string()));
@@ -495,6 +605,31 @@ impl WallpaperRenderer for VideoRenderer {
         }
 
         Ok(())
+    }
+
+    fn is_animated(&self) -> bool {
+        if self.is_paused {
+            return false;
+        }
+        if !self.loop_file
+            && let Some(mpv) = &self.mpv
+            && let Ok(eof) = mpv.get_property::<bool>("eof-reached")
+            && eof
+        {
+            return false;
+        }
+        true
+    }
+
+    fn target_fps(&self) -> Option<f64> {
+        // Pacing and cadence (including 3:2 pulldown) are managed natively by libmpv's PTS clock.
+        // mpv_render_context_update signals MPV_RENDER_UPDATE_FRAME, setting is_dirty to gate swapchain draws.
+        // Returning None avoids artificial fixed-interval quantization against display vblanks.
+        None
+    }
+
+    fn is_dirty(&self) -> bool {
+        self.dirty
     }
 
     fn teardown(&mut self) {
@@ -657,6 +792,31 @@ mod tests {
 
         assert!(renderer.video_path().is_some());
         assert!(renderer.is_looping());
-        assert_eq!(renderer.volume, 0.0);
+        assert_eq!(renderer.volume, 50.0);
+    }
+
+    #[test]
+    fn test_video_renderer_optimization_states() {
+        let mut renderer = VideoRenderer::new();
+        assert!(renderer.is_dirty());
+        assert!(renderer.is_animated());
+        assert!(renderer.target_fps().is_none());
+
+        // Test pause state toggles is_animated
+        renderer
+            .set_property("pause", PropertyValue::Bool(true))
+            .unwrap();
+        assert!(!renderer.is_animated());
+
+        renderer
+            .set_property("play", PropertyValue::Bool(true))
+            .unwrap();
+        assert!(renderer.is_animated());
+        assert!(renderer.is_dirty());
+
+        // Test cached_fps simulation and target_fps delegation
+        renderer.cached_fps = Some(30.0);
+        assert_eq!(renderer.cached_fps, Some(30.0));
+        assert!(renderer.target_fps().is_none());
     }
 }

@@ -498,6 +498,14 @@ impl WallpaperRenderer for ShaderRenderer {
             "Shader custom properties must be floating point numbers".into(),
         ))
     }
+
+    fn wants_pointer(&self) -> bool {
+        if let Some(src) = &self.raw_source {
+            src.contains("mouse") || src.contains("iMouse") || src.contains("u_mouse")
+        } else {
+            false
+        }
+    }
 }
 
 #[cfg(test)]
@@ -507,9 +515,13 @@ mod tests {
     #[test]
     fn test_shader_renderer_lifecycle() {
         let mut renderer = ShaderRenderer::new();
+        assert!(!renderer.wants_pointer());
         renderer.resize(1920, 1080);
         assert_eq!(renderer.width, 1920);
         assert_eq!(renderer.height, 1080);
+
+        renderer.raw_source = Some("void mainImage(...) { vec2 m = iMouse.xy; }".into());
+        assert!(renderer.wants_pointer());
     }
 
     #[test]

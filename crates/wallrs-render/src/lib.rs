@@ -67,6 +67,38 @@ pub trait WallpaperRenderer: Send {
         true
     }
 
+    /// Returns the suggested target FPS for this renderer, if any.
+    ///
+    /// For example, video wallpapers can report their container or estimated video framerate (e.g. 24.0, 30.0, 60.0),
+    /// preventing redundant render passes and GPU swapchain presentations on high refresh rate displays (144Hz, 240Hz).
+    /// Defaults to `None` (rendering at display refresh rate or global max_fps ceiling).
+    fn target_fps(&self) -> Option<f64> {
+        None
+    }
+
+    /// Returns whether the renderer has new visual content that requires presenting a new frame.
+    ///
+    /// When `false`, the display engine can skip swapchain acquisition, command buffer submission,
+    /// and presentation for the current frame callback, saving GPU and CPU cycles.
+    /// Defaults to `true` (e.g., continuous procedural shaders or animated layers).
+    fn is_dirty(&self) -> bool {
+        true
+    }
+
+    /// Returns whether this wallpaper requires interactive pointer input (e.g., cursor parallax or mouse uniforms).
+    ///
+    /// When `false` (the default), the Wayland surface configures an empty input region (`WlRegion`),
+    /// granting complete click-through pass-through to the underlying desktop.
+    fn wants_pointer(&self) -> bool {
+        false
+    }
+
+    /// Returns whether this renderer desires periodic low-frequency wakeup ticks (e.g. 1 Hz)
+    /// to update time-dependent visuals like day/night cycles when no high-frequency animations are active.
+    fn wants_periodic_tick(&self) -> bool {
+        false
+    }
+
     /// Tears down any allocated resources.
     fn teardown(&mut self) {}
 }
@@ -187,6 +219,7 @@ mod tests {
     fn test_solid_color_renderer_properties() {
         let mut renderer = SolidColorRenderer::default();
         assert!(!renderer.is_animated());
+        assert!(!renderer.wants_pointer());
         assert_eq!(renderer.color, [0.059, 0.090, 0.165, 1.0]);
 
         renderer.resize(1920, 1080);

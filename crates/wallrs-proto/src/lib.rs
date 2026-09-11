@@ -100,6 +100,10 @@ pub struct WallpaperMeta {
     pub r#type: String, // "image", "shader", "video"
     pub name: String,
     #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
     pub thumbnail: Option<PathBuf>,
 }
 
@@ -107,6 +111,33 @@ pub struct WallpaperMeta {
 pub struct ImageConfig {
     #[serde(default)]
     pub layers: Vec<ImageLayerConfig>,
+    #[serde(default)]
+    pub day_night: Option<DayNightScheduleConfig>,
+    #[serde(default)]
+    pub fps: Option<u32>,
+}
+
+/// Global day/night lighting schedule and custom ambient tint curve for an image wallpaper.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DayNightScheduleConfig {
+    /// Hour when dawn begins (default 5.5 / 05:30)
+    pub dawn_start: Option<f32>,
+    /// Hour when full daylight is reached (default 8.0 / 08:00)
+    pub day_start: Option<f32>,
+    /// Hour when dusk begins (default 18.0 / 18:00)
+    pub dusk_start: Option<f32>,
+    /// Hour when full night is reached (default 21.0 / 21:00)
+    pub night_start: Option<f32>,
+    /// Custom ambient tint keyframe nodes
+    #[serde(default)]
+    pub tint_curve: Option<Vec<TintNodeConfig>>,
+}
+
+/// Keyframe node for custom ambient tint curve.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TintNodeConfig {
+    pub hour: f32,
+    pub tint: [f32; 3],
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -116,6 +147,82 @@ pub struct ImageLayerConfig {
     pub parallax: Option<f32>,
     #[serde(default)]
     pub pan: Option<PanConfig>,
+    #[serde(default)]
+    pub oscillation: Option<OscillationConfig>,
+    #[serde(default, deserialize_with = "deserialize_day_night")]
+    pub day_night: Option<DayNightMode>,
+    #[serde(default)]
+    pub tint: Option<[f32; 3]>,
+}
+
+/// Dynamic day/night behavior for an image layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DayNightMode {
+    /// Ambient lighting tint based on time of day (dawn, noon, sunset, night)
+    Tint,
+    /// Layer only visible at night (fades in at dusk, fades out at dawn)
+    Night,
+    /// Layer only visible during the day (fades out at dusk, fades in at dawn)
+    Day,
+}
+
+/// Flexible deserializer for `Option<DayNightMode>` accepting bools or strings.
+pub fn deserialize_day_night<'de, D>(deserializer: D) -> Result<Option<DayNightMode>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct DayNightOptVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for DayNightOptVisitor {
+        type Value = Option<DayNightMode>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a boolean or string (\"tint\", \"night\", \"day\")")
+        }
+
+        fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            if v {
+                Ok(Some(DayNightMode::Tint))
+            } else {
+                Ok(None)
+            }
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            match v.to_ascii_lowercase().as_str() {
+                "tint" => Ok(Some(DayNightMode::Tint)),
+                "night" => Ok(Some(DayNightMode::Night)),
+                "day" => Ok(Some(DayNightMode::Day)),
+                other => Err(serde::de::Error::unknown_variant(
+                    other,
+                    &["tint", "night", "day"],
+                )),
+            }
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_some<D2>(self, deserializer: D2) -> Result<Self::Value, D2::Error>
+        where
+            D2: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(self)
+        }
+    }
+
+    deserializer.deserialize_any(DayNightOptVisitor)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -130,8 +237,24 @@ fn default_pan_axis() -> String {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OscillationConfig {
+    pub speed: f32,
+    pub amplitude: f32,
+    #[serde(default = "default_oscillation_axis")]
+    pub axis: String,
+    #[serde(default)]
+    pub phase: Option<f32>,
+}
+
+fn default_oscillation_axis() -> String {
+    "y".into()
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ShaderConfig {
     pub entry: PathBuf,
+    #[serde(default)]
+    pub audio: Option<bool>,
     #[serde(default)]
     pub uniforms: std::collections::HashMap<String, f32>,
 }
@@ -334,5 +457,132 @@ entry = "main.wgsl"
             manifest.wallpaper.thumbnail,
             Some(PathBuf::from("thumb.png"))
         );
+    }
+
+    #[test]
+    fn test_wallpaper_manifest_with_author_and_shader_audio() {
+        let toml_data = r#"
+[wallpaper]
+type = "shader"
+name = "aurora-live"
+author = "Developer"
+description = "A dynamic aurora shader"
+
+[shader]
+entry = "aurora.wgsl"
+audio = true
+"#;
+
+        let manifest = WallpaperManifest::from_toml_str(toml_data).expect("failed to parse TOML");
+        assert_eq!(manifest.wallpaper.name, "aurora-live");
+        assert_eq!(manifest.wallpaper.author, Some("Developer".into()));
+        assert_eq!(
+            manifest.wallpaper.description,
+            Some("A dynamic aurora shader".into())
+        );
+        let shader = manifest.shader.expect("shader config missing");
+        assert_eq!(shader.entry, PathBuf::from("aurora.wgsl"));
+        assert_eq!(shader.audio, Some(true));
+    }
+
+    #[test]
+    fn test_wallpaper_manifest_image_with_oscillation() {
+        let toml_data = r#"
+[wallpaper]
+type = "image"
+name = "floating-island"
+
+[[image.layers]]
+path = "island.png"
+parallax = 0.3
+oscillation = { speed = 1.5, amplitude = 0.02, axis = "y", phase = 0.5 }
+"#;
+
+        let manifest = WallpaperManifest::from_toml_str(toml_data).expect("failed to parse TOML");
+        let img = manifest.image.expect("image config missing");
+        assert_eq!(img.layers.len(), 1);
+        let layer = &img.layers[0];
+        assert_eq!(layer.parallax, Some(0.3));
+        let osc = layer.oscillation.as_ref().expect("oscillation missing");
+        assert_eq!(osc.speed, 1.5);
+        assert_eq!(osc.amplitude, 0.02);
+        assert_eq!(osc.axis, "y");
+        assert_eq!(osc.phase, Some(0.5));
+    }
+
+    #[test]
+    fn test_wallpaper_manifest_image_with_day_night_and_tint() {
+        let toml_data = r#"
+[wallpaper]
+type = "image"
+name = "day-night-cycle"
+
+[[image.layers]]
+path = "sky.png"
+day_night = true
+tint = [0.95, 0.90, 1.0]
+
+[[image.layers]]
+path = "stars.png"
+day_night = "night"
+
+[[image.layers]]
+path = "birds.png"
+day_night = "day"
+"#;
+
+        let manifest = WallpaperManifest::from_toml_str(toml_data).expect("failed to parse TOML");
+        let img = manifest.image.expect("image config missing");
+        assert_eq!(img.layers.len(), 3);
+
+        assert_eq!(img.layers[0].day_night, Some(DayNightMode::Tint));
+        assert_eq!(img.layers[0].tint, Some([0.95, 0.90, 1.0]));
+
+        assert_eq!(img.layers[1].day_night, Some(DayNightMode::Night));
+        assert_eq!(img.layers[1].tint, None);
+
+        assert_eq!(img.layers[2].day_night, Some(DayNightMode::Day));
+    }
+
+    #[test]
+    fn test_day_night_schedule_manifest() {
+        let toml_data = r#"
+[wallpaper]
+type = "image"
+name = "custom-schedule"
+
+[image.day_night]
+dawn_start = 6.0
+day_start = 8.5
+dusk_start = 17.5
+night_start = 20.5
+
+[[image.day_night.tint_curve]]
+hour = 2.0
+tint = [0.15, 0.22, 0.40]
+
+[[image.day_night.tint_curve]]
+hour = 12.0
+tint = [1.0, 1.0, 1.0]
+
+[[image.layers]]
+path = "bg.png"
+day_night = "tint"
+"#;
+
+        let manifest = WallpaperManifest::from_toml_str(toml_data).expect("failed to parse TOML");
+        let img = manifest.image.expect("image config missing");
+        let dn = img.day_night.expect("day_night config missing");
+        assert_eq!(dn.dawn_start, Some(6.0));
+        assert_eq!(dn.day_start, Some(8.5));
+        assert_eq!(dn.dusk_start, Some(17.5));
+        assert_eq!(dn.night_start, Some(20.5));
+
+        let curve = dn.tint_curve.expect("tint_curve missing");
+        assert_eq!(curve.len(), 2);
+        assert_eq!(curve[0].hour, 2.0);
+        assert_eq!(curve[0].tint, [0.15, 0.22, 0.40]);
+        assert_eq!(curve[1].hour, 12.0);
+        assert_eq!(curve[1].tint, [1.0, 1.0, 1.0]);
     }
 }

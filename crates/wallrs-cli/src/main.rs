@@ -1,8 +1,14 @@
+mod scaffold;
+mod validate;
+mod xdg;
+
 use clap::{Args, Parser, Subcommand};
+use scaffold::{NewWallpaperArgs, handle_new_wallpaper};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use validate::validate_wallpaper;
 use wallrs_proto::{
     Command, OutputInfoProto, OutputSelector, PropertyValue, Response, default_socket_path,
 };
@@ -66,6 +72,10 @@ enum Subcommands {
 
     /// Validate and lint a wallpaper folder or wallpaper.toml manifest
     Validate(ValidateArgs),
+
+    /// Scaffold and create a new wallpaper directory with templates and configuration
+    #[command(alias = "init")]
+    New(NewWallpaperArgs),
 
     /// Gracefully terminate the wallrsd daemon
     Kill,
@@ -208,6 +218,11 @@ pub fn parse_property_value(val: &str) -> PropertyValue {
     if let Ok(num) = val.parse::<f32>() {
         return PropertyValue::Number(num);
     }
+    if let Some((h_str, m_str)) = val.split_once(':')
+        && let (Ok(h), Ok(m)) = (h_str.trim().parse::<f32>(), m_str.trim().parse::<f32>())
+    {
+        return PropertyValue::Number((h + m / 60.0).rem_euclid(24.0));
+    }
     if val.starts_with('#')
         && let Ok(color) = parse_hex_color(val)
     {
@@ -249,190 +264,6 @@ fn print_outputs_table(outputs: &[OutputInfoProto]) {
             out.name, res, status, audio, wall
         );
     }
-}
-
-fn validate_wallpaper(path: &Path) -> Result<(), String> {
-    let manifest_path = if path.is_dir() {
-        path.join("wallpaper.toml")
-    } else {
-        path.to_path_buf()
-    };
-
-    if !manifest_path.exists() {
-        return Err(format!(
-            "Wallpaper manifest not found at {:?}",
-            manifest_path
-        ));
-    }
-
-    let content = std::fs::read_to_string(&manifest_path)
-        .map_err(|e| format!("Failed to read {:?}: {}", manifest_path, e))?;
-
-    let manifest = wallrs_proto::WallpaperManifest::from_toml_str(&content)
-        .map_err(|e| format!("Syntax error in wallpaper.toml: {}", e))?;
-
-    let base_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
-
-    println!("Validating wallpaper: {:?}", manifest_path);
-    println!("  • Name: \"{}\"", manifest.wallpaper.name);
-    println!("  • Type: \"{}\"", manifest.wallpaper.r#type);
-
-    match manifest.wallpaper.r#type.as_str() {
-        "image" => {
-            let Some(img) = &manifest.image else {
-                return Err(
-                    "Manifest declares type 'image' but is missing [image] configuration block"
-                        .into(),
-                );
-            };
-            if img.layers.is_empty() {
-                return Err("Image wallpaper has 0 layers defined in [[image.layers]]".into());
-            }
-            println!("  • Layers ({}):", img.layers.len());
-            for (i, layer) in img.layers.iter().enumerate() {
-                let layer_file = if layer.path.is_absolute() {
-                    layer.path.clone()
-                } else {
-                    base_dir.join(&layer.path)
-                };
-                if !layer_file.exists() {
-                    return Err(format!("Layer {i} file does not exist: {:?}", layer_file));
-                }
-                match image::image_dimensions(&layer_file) {
-                    Ok((w, h)) => {
-                        let parallax_str =
-                            layer.parallax.map_or("none".into(), |p| format!("{p:.2}"));
-                        let pan_str = layer.pan.as_ref().map_or("none".into(), |p| {
-                            format!("speed: {}, axis: {}", p.speed, p.axis)
-                        });
-                        println!(
-                            "    ✓ Layer {i}: {:?} ({}x{}) [parallax: {}, pan: {}]",
-                            layer.path, w, h, parallax_str, pan_str
-                        );
-                    }
-                    Err(e) => {
-                        return Err(format!(
-                            "Layer {i} file {:?} is not a valid image: {}",
-                            layer_file, e
-                        ));
-                    }
-                }
-            }
-        }
-        "shader" => {
-            let Some(sh) = &manifest.shader else {
-                return Err(
-                    "Manifest declares type 'shader' but is missing [shader] configuration block"
-                        .into(),
-                );
-            };
-            let shader_file = if sh.entry.is_absolute() {
-                sh.entry.clone()
-            } else {
-                base_dir.join(&sh.entry)
-            };
-            if !shader_file.exists() {
-                return Err(format!(
-                    "Shader entry file does not exist: {:?}",
-                    shader_file
-                ));
-            }
-            let shader_code = std::fs::read_to_string(&shader_file)
-                .map_err(|e| format!("Failed to read shader file {:?}: {}", shader_file, e))?;
-
-            let is_glsl = shader_file.extension().and_then(|ext| ext.to_str()) == Some("glsl")
-                || shader_code.contains("void mainImage");
-
-            if is_glsl {
-                match wallrs_content_shader::translate_shadertoy_glsl_to_wgsl(&shader_code) {
-                    Ok(wgsl) => {
-                        if let Err(e) = naga::front::wgsl::parse_str(&wgsl) {
-                            return Err(format!(
-                                "Translated Shadertoy WGSL failed validation:\n{}",
-                                e.emit_to_string(&wgsl)
-                            ));
-                        }
-                        println!(
-                            "    ✓ Shadertoy GLSL shader validated successfully: {:?}",
-                            sh.entry
-                        );
-                    }
-                    Err(e) => {
-                        return Err(format!(
-                            "Shadertoy GLSL translation error in {:?}: {}",
-                            shader_file, e
-                        ));
-                    }
-                }
-            } else {
-                let prepared = wallrs_content_shader::prepare_wgsl(&shader_code);
-                if let Err(e) = naga::front::wgsl::parse_str(&prepared) {
-                    return Err(format!(
-                        "WGSL shader syntax error in {:?}:\n{}",
-                        shader_file,
-                        e.emit_to_string(&prepared)
-                    ));
-                }
-                println!(
-                    "    ✓ Native WGSL shader validated successfully: {:?}",
-                    sh.entry
-                );
-            }
-        }
-        "video" => {
-            let Some(vid) = &manifest.video else {
-                return Err(
-                    "Manifest declares type 'video' but is missing [video] configuration block"
-                        .into(),
-                );
-            };
-            let video_file = if vid.path.is_absolute() {
-                vid.path.clone()
-            } else {
-                base_dir.join(&vid.path)
-            };
-            if !video_file.exists() {
-                return Err(format!("Video file does not exist: {:?}", video_file));
-            }
-            let vol = vid.volume.unwrap_or(50.0);
-            let lp = vid.r#loop.unwrap_or(true);
-            println!(
-                "    ✓ Video file exists: {:?} [volume: {}%, loop: {}]",
-                vid.path, vol, lp
-            );
-        }
-        other => {
-            return Err(format!(
-                "Unknown wallpaper type: '{other}'. Expected 'image', 'shader', or 'video'"
-            ));
-        }
-    }
-
-    if let Some(audio) = &manifest.audio {
-        let audio_file = if audio.path.is_absolute() {
-            audio.path.clone()
-        } else {
-            base_dir.join(&audio.path)
-        };
-        if !audio_file.exists() {
-            return Err(format!(
-                "Background audio track file does not exist: {:?}",
-                audio_file
-            ));
-        }
-        let vol = audio.volume.unwrap_or(50.0);
-        let lp = audio.r#loop.unwrap_or(true);
-        println!(
-            "  • Background audio track: {:?} [volume: {}%, loop: {}]",
-            audio.path, vol, lp
-        );
-    }
-
-    println!(
-        "✓ Wallpaper '{}' is valid and ready to use!",
-        manifest.wallpaper.name
-    );
-    Ok(())
 }
 
 fn send_command(socket_path: &Path, cmd: &Command) -> Result<Response, String> {
@@ -617,6 +448,9 @@ fn run() -> Result<(), String> {
     if let Subcommands::Validate(args) = cli.command {
         return validate_wallpaper(&args.path);
     }
+    if let Subcommands::New(args) = cli.command {
+        return handle_new_wallpaper(args);
+    }
     let socket_path = cli.socket.unwrap_or_else(default_socket_path);
 
     if let Subcommands::Preview(args) = cli.command {
@@ -711,14 +545,7 @@ fn run() -> Result<(), String> {
             false,
         ),
         Subcommands::SetWallpaper(args) => {
-            let manifest_path = if args.path.is_dir() {
-                args.path.join("wallpaper.toml")
-            } else {
-                args.path
-            };
-            let canonical = manifest_path.canonicalize().map_err(|e| {
-                format!("Failed to find wallpaper manifest at {manifest_path:?}: {e}")
-            })?;
+            let canonical = xdg::resolve_wallpaper_path(&args.path)?;
             let selector = match args.output {
                 Some(name) => OutputSelector::Named(name),
                 None => OutputSelector::All,
@@ -743,7 +570,7 @@ fn run() -> Result<(), String> {
             false,
         ),
         Subcommands::Kill => (Command::Kill, false),
-        Subcommands::Validate(_) | Subcommands::Preview(_) => unreachable!(),
+        Subcommands::Validate(_) | Subcommands::Preview(_) | Subcommands::New(_) => unreachable!(),
     };
 
     let resp = send_command(&socket_path, &cmd)?;
@@ -978,6 +805,61 @@ mod tests {
                 );
             }
             _ => panic!("Expected Subcommands::Preview"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_new_shader() {
+        let cli = Cli::try_parse_from([
+            "wallctl",
+            "new",
+            "aurora-test",
+            "--type",
+            "shader",
+            "--audio",
+            "--author",
+            "Alice",
+        ])
+        .unwrap();
+        match cli.command {
+            Subcommands::New(args) => {
+                assert_eq!(args.name, "aurora-test");
+                assert_eq!(args.r#type, Some("shader".into()));
+                assert!(args.audio);
+                assert_eq!(args.author, Some("Alice".into()));
+            }
+            _ => panic!("Expected Subcommands::New"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_init_alias() {
+        let cli = Cli::try_parse_from(["wallctl", "init", "my-custom-wall", "-t", "image", "-f"])
+            .unwrap();
+        match cli.command {
+            Subcommands::New(args) => {
+                assert_eq!(args.name, "my-custom-wall");
+                assert_eq!(args.r#type, Some("image".into()));
+                assert!(args.force);
+            }
+            _ => panic!("Expected Subcommands::New"),
+        }
+    }
+
+    #[test]
+    fn test_parse_property_value_time() {
+        assert_eq!(parse_property_value("14.5"), PropertyValue::Number(14.5));
+        assert_eq!(parse_property_value("14:30"), PropertyValue::Number(14.5));
+        assert_eq!(parse_property_value("06:15"), PropertyValue::Number(6.25));
+        assert_eq!(parse_property_value("true"), PropertyValue::Bool(true));
+        assert_eq!(
+            parse_property_value("reset"),
+            PropertyValue::Text("reset".into())
+        );
+        if let PropertyValue::Color(c) = parse_property_value("#ffffff") {
+            assert_eq!(c, [1.0, 1.0, 1.0, 1.0]);
+        } else {
+            panic!("Expected color");
         }
     }
 }

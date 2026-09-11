@@ -47,6 +47,6 @@ fi
 
 echo "wallrs preview image: $PREVIEW_IMAGE"
 echo "Generating Material You theme with matugen..."
-matugen image "$PREVIEW_IMAGE"
+matugen image --prefer saturation "$PREVIEW_IMAGE"
 echo "Theme applied successfully!"
 

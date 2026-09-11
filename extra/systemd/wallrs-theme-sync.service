@@ -7,7 +7,7 @@ After=graphical-session.target wallrsd.service
 [Service]
 Type=oneshot
 ExecStart=/usr/share/wallrs/contrib/wallrs-theme-sync.sh
-PassEnvironment=WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP
+PassEnvironment=WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP PATH
 TimeoutSec=15
 StandardOutput=journal
 StandardError=journal

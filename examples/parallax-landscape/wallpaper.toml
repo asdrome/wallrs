@@ -1,11 +1,53 @@
 [wallpaper]
 type = "image"
 name = "parallax-landscape"
+author = "Antonio S. Dromundo"
+description = "Multi-layer parallax landscape with continuous drifting clouds, dynamic day/night cycle, and celestial motion"
 
+[image]
+fps = 60
+
+# 1. Daytime sky (vibrant clear blue, smoothly fades out at dusk)
 [[image.layers]]
-path = "bg.png"
+path = "sky-day.png"
+parallax = 0.04
+day_night = "day"
 
+# 2. Night sky (deep dark nocturnal navy, smoothly fades in at dusk)
+[[image.layers]]
+path = "sky-night.png"
+parallax = 0.04
+day_night = "night"
+
+# 3. Night sky stars (visible only at night, smooth dawn/dusk transition)
+[[image.layers]]
+path = "stars.png"
+parallax = 0.06
+day_night = "night"
+
+# 4. Radiant day sun (visible only during daylight hours, gentle floating motion)
+[[image.layers]]
+path = "sun.png"
+parallax = 0.08
+oscillation = { speed = 0.3, amplitude = 0.005, axis = "y" }
+day_night = "day"
+
+# 5. Luminous night moon (visible only at night, gentle floating motion)
+[[image.layers]]
+path = "moon.png"
+parallax = 0.08
+oscillation = { speed = 0.3, amplitude = 0.005, axis = "y", phase = 3.14 }
+day_night = "night"
+
+# 6. Midground drifting clouds (continuous pan + ambient lighting)
+[[image.layers]]
+path = "clouds.png"
+parallax = 0.25
+pan = { speed = 0.02, axis = "x" }
+day_night = "tint"
+
+# 7. Foreground terrain (pointer parallax, ambient lighting)
 [[image.layers]]
 path = "fg.png"
-parallax = 0.5
-pan = { speed = 0.005, axis = "x" }
+parallax = 0.55
+day_night = "tint"
