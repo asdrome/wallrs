@@ -1202,17 +1202,14 @@ mod tests {
 
     #[test]
     fn test_target_fps_and_settling() {
-        let static_layer = (
-            2, 2, vec![0; 16], None, None, None, None, None,
-        );
+        let static_layer = (2, 2, vec![0; 16], None, None, None, None, None);
         let static_renderer = ImageRenderer::from_memory_layers(vec![static_layer.clone()]);
         assert_eq!(static_renderer.target_fps(), None);
         assert!(!static_renderer.is_animated());
 
-        let parallax_layer = (
-            2, 2, vec![0; 16], Some(0.5), None, None, None, None,
-        );
-        let mut motion_renderer = ImageRenderer::from_memory_layers(vec![static_layer, parallax_layer]);
+        let parallax_layer = (2, 2, vec![0; 16], Some(0.5), None, None, None, None);
+        let mut motion_renderer =
+            ImageRenderer::from_memory_layers(vec![static_layer, parallax_layer]);
         assert_eq!(motion_renderer.target_fps(), Some(60.0));
         assert!(motion_renderer.is_animated());
 
