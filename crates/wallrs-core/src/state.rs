@@ -100,8 +100,14 @@ pub fn save_state(path: &Path, snapshot: &StateSnapshot) -> Result<(), std::io::
     let json = serde_json::to_string_pretty(snapshot)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
-    std::fs::write(path, json.as_bytes())?;
-    tracing::debug!(path = %path.display(), "Session state saved");
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("state.json");
+    let temp_path = path.with_file_name(format!(".{file_name}.tmp.{}", std::process::id()));
+    std::fs::write(&temp_path, json.as_bytes())?;
+    std::fs::rename(&temp_path, path)?;
+    tracing::debug!(path = %path.display(), "Session state saved atomically");
     Ok(())
 }
 

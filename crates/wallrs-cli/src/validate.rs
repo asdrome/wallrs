@@ -158,7 +158,7 @@ pub fn validate_wallpaper(path: &Path) -> Result<(), String> {
             if !video_file.exists() {
                 return Err(format!("Video file does not exist: {:?}", video_file));
             }
-            let vol = vid.volume.unwrap_or(50.0);
+            let vol = vid.volume.unwrap_or(0.0);
             let lp = vid.r#loop.unwrap_or(true);
             println!(
                 "    ✓ Video file exists: {:?} [volume: {}%, loop: {}]",

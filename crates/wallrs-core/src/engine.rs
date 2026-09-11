@@ -1013,11 +1013,10 @@ impl Engine {
         tracing::info!("Entering main event loop");
         let mut last_periodic_tick = std::time::Instant::now();
         while !self.state.exit {
+            let timeout =
+                std::time::Duration::from_millis(1000).saturating_sub(last_periodic_tick.elapsed());
             self.event_loop
-                .dispatch(
-                    Some(std::time::Duration::from_millis(1000)),
-                    &mut self.state,
-                )
+                .dispatch(Some(timeout), &mut self.state)
                 .map_err(|e| EngineError::EventLoop(e.to_string()))?;
 
             let now = std::time::Instant::now();

@@ -573,14 +573,18 @@ pub fn apply_wallpaper(
                                 if out.is_paused() {
                                     player.set_paused(true);
                                 }
-                                if !state.allow_audio {
+                                if state.allow_audio {
+                                    let _ = player.set_property(
+                                        "mute",
+                                        wallrs_proto::PropertyValue::Bool(false),
+                                    );
+                                    out.audio_muted = false;
+                                } else {
                                     let _ = player.set_property(
                                         "mute",
                                         wallrs_proto::PropertyValue::Bool(true),
                                     );
                                     out.audio_muted = true;
-                                } else {
-                                    out.audio_muted = false;
                                 }
                                 out.audio_track = Some(player);
                             }
@@ -659,14 +663,18 @@ pub fn apply_wallpaper(
                                 if out.is_paused() {
                                     player.set_paused(true);
                                 }
-                                if !state.allow_audio {
+                                if state.allow_audio {
+                                    let _ = player.set_property(
+                                        "mute",
+                                        wallrs_proto::PropertyValue::Bool(false),
+                                    );
+                                    out.audio_muted = false;
+                                } else {
                                     let _ = player.set_property(
                                         "mute",
                                         wallrs_proto::PropertyValue::Bool(true),
                                     );
                                     out.audio_muted = true;
-                                } else {
-                                    out.audio_muted = false;
                                 }
                                 out.audio_track = Some(player);
                             }

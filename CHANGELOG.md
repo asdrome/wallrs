@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Parallax Landscape Example**: Removed vertical oscillation on foreground mountain layer (`fg.png`) in `examples/parallax-landscape/wallpaper.toml` so mountains remain grounded, and configured `[image] fps = 60`.
+- **Fallback Shader Uniform Layout**: Aligned `UNIVERSAL_FALLBACK_WGSL` in `wallrs-cli` with the standard 192-byte `ShaderUniforms` layout (with `resolution` at offset 0 and `time` at offset 8), resolving an issue where fallback shaders failed to animate over time.
+- **Background Audio Initial Leak Guard**: Initialized `BackgroundAudioPlayer` in a strictly muted state with `ao = "null"` before starting playback, eliminating transient audio bursts or pops upon wallpaper load when audio is disabled.
+- **Atomic Session State Persistence**: Implemented genuine atomic state saving in `wallrs-core` using temporary files and filesystem rename, preventing potential file corruption on abrupt daemon termination.
+- **Event Loop Periodic Timer Drift**: Dynamically calculated remaining timeout before next tick via `saturating_sub` in `Engine::run()`, guaranteeing accurate 1.00 Hz day/night updates even when interim Wayland/pointer events wake the dispatch loop.
+- **Default Video Volume Harmonization**: Aligned CLI validator and scaffolding defaults to 0.0% (muted by default), matching `VideoRenderer` behavior.
+- **Daemon Shorthand Hex Parsing**: Added support for 3-digit (`#RGB`) and 4-digit (`#RGBA`) hex color formats to `wallrsd --color`, matching `wallctl`.
 
 ## [1.1.3] - 2026-09-10
 

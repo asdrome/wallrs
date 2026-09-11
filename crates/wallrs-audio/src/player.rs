@@ -44,6 +44,10 @@ impl BackgroundAudioPlayer {
         let _ = mpv.set_property("audio-display", "no");
         let _ = mpv.set_property("keep-open", "yes");
         let _ = mpv.set_property("idle", "yes");
+        // Always initialize MPV in a strictly muted state with no audio threads (ao = "null").
+        // Unmuting is explicitly triggered by daemon policy or CLI commands.
+        let _ = mpv.set_property("mute", true);
+        let _ = mpv.set_property("ao", "null");
         let _ = mpv.set_property("volume", volume.clamp(0.0, 100.0));
 
         if loop_track {
@@ -126,6 +130,11 @@ impl BackgroundAudioPlayer {
             "mute" => match value {
                 PropertyValue::Bool(b) => {
                     let _ = mpv.set_property("mute", b);
+                    if b {
+                        let _ = mpv.set_property("ao", "null");
+                    } else if self.volume > 0.0 {
+                        let _ = mpv.set_property("ao", "auto");
+                    }
                     Ok(())
                 }
                 _ => Err(AudioPlayerError::InvalidProperty(

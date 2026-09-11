@@ -50,7 +50,23 @@ struct Args {
 fn parse_color(s: &str) -> Result<[f32; 4], String> {
     let s = s.trim();
     if let Some(hex) = s.strip_prefix('#').or(Some(s)) {
-        if hex.len() == 6 {
+        if hex.len() == 3 {
+            let r = u8::from_str_radix(&hex[0..1], 16).map_err(|e| e.to_string())? * 17;
+            let g = u8::from_str_radix(&hex[1..2], 16).map_err(|e| e.to_string())? * 17;
+            let b = u8::from_str_radix(&hex[2..3], 16).map_err(|e| e.to_string())? * 17;
+            return Ok([r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]);
+        } else if hex.len() == 4 {
+            let r = u8::from_str_radix(&hex[0..1], 16).map_err(|e| e.to_string())? * 17;
+            let g = u8::from_str_radix(&hex[1..2], 16).map_err(|e| e.to_string())? * 17;
+            let b = u8::from_str_radix(&hex[2..3], 16).map_err(|e| e.to_string())? * 17;
+            let a = u8::from_str_radix(&hex[3..4], 16).map_err(|e| e.to_string())? * 17;
+            return Ok([
+                r as f32 / 255.0,
+                g as f32 / 255.0,
+                b as f32 / 255.0,
+                a as f32 / 255.0,
+            ]);
+        } else if hex.len() == 6 {
             let r = u8::from_str_radix(&hex[0..2], 16).map_err(|e| e.to_string())? as f32 / 255.0;
             let g = u8::from_str_radix(&hex[2..4], 16).map_err(|e| e.to_string())? as f32 / 255.0;
             let b = u8::from_str_radix(&hex[4..6], 16).map_err(|e| e.to_string())? as f32 / 255.0;
@@ -178,6 +194,15 @@ mod tests {
 
     #[test]
     fn test_parse_color() {
+        let c3 = parse_color("#f00").unwrap();
+        assert_eq!(c3, [1.0, 0.0, 0.0, 1.0]);
+
+        let c4 = parse_color("#f008").unwrap();
+        assert_eq!(c4[0], 1.0);
+        assert_eq!(c4[1], 0.0);
+        assert_eq!(c4[2], 0.0);
+        assert!((c4[3] - 0.5333).abs() < 1e-2);
+
         let c6 = parse_color("#ff0000").unwrap();
         assert!((c6[0] - 1.0).abs() < 1e-4);
         assert!((c6[1] - 0.0).abs() < 1e-4);

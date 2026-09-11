@@ -20,15 +20,24 @@ const UNIVERSAL_FALLBACK_WGSL: &str = r#"struct VertexOutput {
     @location(0) uv: vec2<f32>,
 };
 
-struct TimeUniform {
+struct ShaderUniforms {
+    resolution: vec2<f32>,
     time: f32,
-    delta: f32,
+    time_delta: f32,
+    mouse: vec4<f32>,
     frame: u32,
-    _pad: f32,
+    custom0: f32,
+    custom1: f32,
+    custom2: f32,
+    audio_bass: f32,
+    audio_mid: f32,
+    audio_treble: f32,
+    audio_volume: f32,
+    audio_spectrum: array<vec4<f32>, 8>,
 };
 
 @group(0) @binding(0)
-var<uniform> u_time: TimeUniform;
+var<uniform> u_params: ShaderUniforms;
 
 @vertex
 fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
@@ -50,7 +59,7 @@ fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let uv = in.uv;
-    let t = u_time.time * 0.4;
+    let t = u_params.time * 0.4;
     let wave1 = sin(uv.x * 3.5 + t) * 0.12;
     let wave2 = cos(uv.y * 2.8 - t * 0.7) * 0.12;
     let col_dark = vec3<f32>(0.04, 0.06, 0.16);
@@ -425,7 +434,7 @@ pub fn handle_new_wallpaper(args: NewWallpaperArgs) -> Result<(), String> {
                 toml_str.push_str(&content[idx..]);
             } else {
                 let vid = custom_video_path.unwrap_or_else(|| "sample.mp4".into());
-                let vol = args.volume.unwrap_or(50.0);
+                let vol = args.volume.unwrap_or(0.0);
                 let lp = !args.no_loop;
                 toml_str.push_str(&format!(
                     "\n[video]\npath = \"{}\"\nvolume = {:.1}\nloop = {}\n",
