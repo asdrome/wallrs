@@ -41,8 +41,17 @@ pub fn wallpaper_search_dirs() -> Vec<PathBuf> {
     let mut dirs = vec![default_user_wallpapers_dir()];
     dirs.push(data_home().join("wallrs").join("examples"));
 
-    // Working directory / repository fallback: ./examples
+    // Working directory / repository fallback: ./examples, ../../examples
     dirs.push(PathBuf::from("examples"));
+    dirs.push(PathBuf::from("../../examples"));
+
+    // Workspace repository fallback during development and testing
+    if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR") {
+        let p = Path::new(manifest_dir);
+        if let Some(workspace_root) = p.parent().and_then(|p| p.parent()) {
+            dirs.push(workspace_root.join("examples"));
+        }
+    }
 
     // Relative to current executable binary
     if let Ok(exe_path) = std::env::current_exe()
@@ -51,6 +60,7 @@ pub fn wallpaper_search_dirs() -> Vec<PathBuf> {
         dirs.push(bin_dir.join("examples"));
         dirs.push(bin_dir.join("..").join("examples"));
         dirs.push(bin_dir.join("..").join("..").join("examples"));
+        dirs.push(bin_dir.join("..").join("..").join("..").join("examples"));
         dirs.push(
             bin_dir
                 .join("..")
@@ -125,8 +135,17 @@ pub fn template_search_dirs() -> Vec<PathBuf> {
     // 1. User templates: $XDG_DATA_HOME/wallrs/templates
     dirs.push(data_home().join("wallrs").join("templates"));
 
-    // 2. Working directory / repository fallback: ./examples
+    // 2. Working directory / repository fallback: ./examples, ../../examples
     dirs.push(PathBuf::from("examples"));
+    dirs.push(PathBuf::from("../../examples"));
+
+    // Workspace repository fallback during development and testing
+    if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR") {
+        let p = Path::new(manifest_dir);
+        if let Some(workspace_root) = p.parent().and_then(|p| p.parent()) {
+            dirs.push(workspace_root.join("examples"));
+        }
+    }
 
     // 3. Relative to current executable binary
     if let Ok(exe_path) = std::env::current_exe()
@@ -135,6 +154,7 @@ pub fn template_search_dirs() -> Vec<PathBuf> {
         dirs.push(bin_dir.join("examples"));
         dirs.push(bin_dir.join("..").join("examples"));
         dirs.push(bin_dir.join("..").join("..").join("examples"));
+        dirs.push(bin_dir.join("..").join("..").join("..").join("examples"));
         dirs.push(
             bin_dir
                 .join("..")

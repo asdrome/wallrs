@@ -587,7 +587,7 @@ mod tests {
 
         let wall_dir = temp_dir.join("test-image-wall");
         assert!(wall_dir.join("wallpaper.toml").exists());
-        assert!(wall_dir.join("bg.png").exists());
+        assert!(wall_dir.join("sky-day.png").exists());
         assert!(wall_dir.join("fg.png").exists());
 
         validate_wallpaper(&wall_dir).expect("Validation should pass");
