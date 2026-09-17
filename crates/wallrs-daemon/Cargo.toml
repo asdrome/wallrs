@@ -21,6 +21,7 @@ wallrs-content-image = { path = "../wallrs-content-image" }
 wallrs-content-shader = { path = "../wallrs-content-shader" }
 wallrs-content-video = { path = "../wallrs-content-video" }
 wallrs-core = { path = "../wallrs-core" }
+wallrs-proto = { path = "../wallrs-proto" }
 wallrs-render = { path = "../wallrs-render" }
 
 [package.metadata.deb]

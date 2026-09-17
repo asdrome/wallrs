@@ -248,6 +248,60 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
             }
         },
 
+        Command::Mute { output } => match output {
+            Some(name) => {
+                let mut matched = false;
+                for out in state.outputs.values_mut() {
+                    if out.name.as_deref() == Some(name.as_str()) {
+                        matched = true;
+                        out.set_muted(true);
+                        state.record_mute_change(&OutputSelector::Named(name.clone()), true);
+                        tracing::info!(output = %name, "Muted output");
+                        break;
+                    }
+                }
+                if !matched {
+                    Response::Error(format!("No matching output found for '{name}'"))
+                } else {
+                    Response::Ok
+                }
+            }
+            None => {
+                for out in state.outputs.values_mut() {
+                    out.set_muted(true);
+                }
+                state.record_mute_change(&OutputSelector::All, true);
+                Response::Ok
+            }
+        },
+
+        Command::Unmute { output } => match output {
+            Some(name) => {
+                let mut matched = false;
+                for out in state.outputs.values_mut() {
+                    if out.name.as_deref() == Some(name.as_str()) {
+                        matched = true;
+                        out.set_muted(false);
+                        state.record_mute_change(&OutputSelector::Named(name.clone()), false);
+                        tracing::info!(output = %name, "Unmuted output");
+                        break;
+                    }
+                }
+                if !matched {
+                    Response::Error(format!("No matching output found for '{name}'"))
+                } else {
+                    Response::Ok
+                }
+            }
+            None => {
+                for out in state.outputs.values_mut() {
+                    out.set_muted(false);
+                }
+                state.record_mute_change(&OutputSelector::All, false);
+                Response::Ok
+            }
+        },
+
         Command::ToggleMute { output } => match output {
             Some(name) => {
                 let mut matched = false;
@@ -290,10 +344,28 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
         Command::SetWallpaper {
             output,
             manifest_path,
+            unmute,
         } => {
             let resp = apply_wallpaper(state, &output, &manifest_path);
             if let Response::Ok = &resp {
                 state.record_set_wallpaper(&output, &manifest_path);
+                if unmute {
+                    for out in state.outputs.values_mut() {
+                        let matches = match &output {
+                            OutputSelector::All => true,
+                            OutputSelector::Named(name) => {
+                                out.name.as_deref() == Some(name.as_str())
+                            }
+                            OutputSelector::Span(names) => {
+                                out.name.as_ref().is_some_and(|n| names.contains(n))
+                            }
+                        };
+                        if matches {
+                            out.set_muted(false);
+                        }
+                    }
+                    state.record_mute_change(&output, false);
+                }
             }
             resp
         }
@@ -824,5 +896,29 @@ mod tests {
         }
         // After swap: Red=50, Green=100, Blue=200, Alpha=255
         assert_eq!(buffer, vec![50, 100, 200, 255, 30, 20, 10, 255]);
+    }
+
+    #[test]
+    fn test_ipc_mute_unmute_commands() {
+        let mute = Command::Mute {
+            output: Some("eDP-1".into()),
+        };
+        let json = serde_json::to_string(&mute).unwrap();
+        let parsed: Command = serde_json::from_str(&json).unwrap();
+        assert_eq!(mute, parsed);
+
+        let unmute = Command::Unmute { output: None };
+        let json = serde_json::to_string(&unmute).unwrap();
+        let parsed: Command = serde_json::from_str(&json).unwrap();
+        assert_eq!(unmute, parsed);
+
+        let set_cmd = Command::SetWallpaper {
+            output: OutputSelector::All,
+            manifest_path: PathBuf::from("examples/aurora-shader/wallpaper.toml"),
+            unmute: true,
+        };
+        let json = serde_json::to_string(&set_cmd).unwrap();
+        let parsed: Command = serde_json::from_str(&json).unwrap();
+        assert_eq!(set_cmd, parsed);
     }
 }

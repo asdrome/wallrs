@@ -1,5 +1,5 @@
 Name:           wallrs
-Version:        1.1.4
+Version:        1.2.0
 Release:        1%{?dist}
 Summary:        High-performance Wayland live wallpaper daemon and CLI controller
 

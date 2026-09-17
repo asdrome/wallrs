@@ -58,6 +58,7 @@ struct ShaderUniforms {
     audio_treble: f32,
     audio_volume: f32,
     audio_spectrum: array<vec4<f32>, 8>,
+    custom_extra: array<vec4<f32>, 2>,
 };
 
 @group(0) @binding(0)
@@ -69,6 +70,17 @@ fn get_audio_band(idx: u32) -> f32 {
     let comp_idx = clamped_idx % 4u;
     return u_params.audio_spectrum[vec_idx][comp_idx];
 }
+
+fn get_custom(slot: u32) -> f32 {
+    if (slot == 0u) { return u_params.custom0; }
+    if (slot == 1u) { return u_params.custom1; }
+    if (slot == 2u) { return u_params.custom2; }
+    let extra_idx = slot - 3u;
+    if (extra_idx < 8u) {
+        return u_params.custom_extra[extra_idx / 4u][extra_idx % 4u];
+    }
+    return 0.0;
+}
 "#;
 
 #[allow(clippy::too_many_arguments)]
@@ -78,11 +90,11 @@ fn uniform_bytes(
     time_delta: f32,
     mouse: [f32; 4],
     frame: u32,
-    custom: [f32; 3],
+    custom: &[f32],
     audio: &wallrs_audio::AudioMetrics,
     spectrum: Option<&[f32]>,
-) -> [u8; 192] {
-    let mut bytes = [0u8; 192];
+) -> [u8; 224] {
+    let mut bytes = [0u8; 224];
     bytes[0..4].copy_from_slice(&resolution[0].to_ne_bytes());
     bytes[4..8].copy_from_slice(&resolution[1].to_ne_bytes());
     bytes[8..12].copy_from_slice(&time.to_ne_bytes());
@@ -92,9 +104,14 @@ fn uniform_bytes(
     bytes[24..28].copy_from_slice(&mouse[2].to_ne_bytes());
     bytes[28..32].copy_from_slice(&mouse[3].to_ne_bytes());
     bytes[32..36].copy_from_slice(&frame.to_ne_bytes());
-    bytes[36..40].copy_from_slice(&custom[0].to_ne_bytes());
-    bytes[40..44].copy_from_slice(&custom[1].to_ne_bytes());
-    bytes[44..48].copy_from_slice(&custom[2].to_ne_bytes());
+
+    let c0 = custom.first().copied().unwrap_or(0.0);
+    let c1 = custom.get(1).copied().unwrap_or(0.0);
+    let c2 = custom.get(2).copied().unwrap_or(0.0);
+    bytes[36..40].copy_from_slice(&c0.to_ne_bytes());
+    bytes[40..44].copy_from_slice(&c1.to_ne_bytes());
+    bytes[44..48].copy_from_slice(&c2.to_ne_bytes());
+
     bytes[48..52].copy_from_slice(&audio.bass.to_ne_bytes());
     bytes[52..56].copy_from_slice(&audio.mid.to_ne_bytes());
     bytes[56..60].copy_from_slice(&audio.treble.to_ne_bytes());
@@ -107,6 +124,14 @@ fn uniform_bytes(
             bytes[offset..offset + 4].copy_from_slice(&band.to_ne_bytes());
         }
     }
+
+    for i in 0..8 {
+        if let Some(&val) = custom.get(3 + i) {
+            let offset = 192 + i * 4;
+            bytes[offset..offset + 4].copy_from_slice(&val.to_ne_bytes());
+        }
+    }
+
     bytes
 }
 
@@ -129,6 +154,7 @@ layout(std140, set = 0, binding = 0) uniform UniformBlock {
     float audio_treble;
     float audio_volume;
     vec4 audio_spectrum[8];
+    vec4 custom_extra[2];
 };
 
 #define iResolution vec3(iResolution2D, 1.0)
@@ -142,6 +168,17 @@ float get_audio_band(uint idx) {
     uint vec_idx = clamped / 4u;
     uint comp_idx = clamped % 4u;
     return audio_spectrum[vec_idx][comp_idx];
+}
+
+float get_custom(uint slot) {
+    if (slot == 0u) return u_custom0;
+    if (slot == 1u) return u_custom1;
+    if (slot == 2u) return u_custom2;
+    uint extra_idx = slot - 3u;
+    if (extra_idx < 8u) {
+        return custom_extra[extra_idx / 4u][extra_idx % 4u];
+    }
+    return 0.0;
 }
 
 layout(location = 0) out vec4 _outColor;
@@ -179,11 +216,50 @@ void main() {
 
 /// Prepares WGSL source code by inlining uniforms if needed.
 pub fn prepare_wgsl(source: &str) -> String {
-    if !source.contains("ShaderUniforms") && !source.contains("var<uniform>") {
+    prepare_wgsl_with_uniforms(source, &[])
+}
+
+/// Prepares WGSL source code by inlining uniforms and named alias helper functions if needed.
+pub fn prepare_wgsl_with_uniforms(source: &str, named_uniforms: &[String]) -> String {
+    let base = if !source.contains("ShaderUniforms") && !source.contains("var<uniform>") {
         format!("{STANDARD_UNIFORM_WGSL}\n{source}")
     } else {
         source.to_string()
+    };
+
+    if named_uniforms.is_empty() {
+        return base;
     }
+
+    let mut helpers = String::new();
+    for (idx, name) in named_uniforms.iter().enumerate().take(11) {
+        if is_valid_wgsl_identifier(name)
+            && !matches!(
+                name.as_str(),
+                "custom0" | "custom1" | "custom2" | "time" | "resolution" | "mouse" | "frame"
+            )
+            && !base.contains(&format!("fn {name}("))
+        {
+            helpers.push_str(&format!(
+                "\nfn {name}() -> f32 {{\n    return get_custom({idx}u);\n}}\n"
+            ));
+        }
+    }
+
+    if helpers.is_empty() {
+        base
+    } else {
+        format!("{helpers}\n{base}")
+    }
+}
+
+fn is_valid_wgsl_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_alphanumeric() || c == '_')
 }
 
 /// Shader wallpaper renderer supporting native WGSL and Shadertoy GLSL via Naga.
@@ -195,6 +271,8 @@ pub struct ShaderRenderer {
     uniform_buffer: Option<wgpu::Buffer>,
     bind_group: Option<wgpu::BindGroup>,
     custom_uniforms: HashMap<String, f32>,
+    uniform_slots: Vec<String>,
+    target_fps: Option<f64>,
     width: u32,
     height: u32,
     frame_count: u32,
@@ -216,6 +294,8 @@ impl ShaderRenderer {
             uniform_buffer: None,
             bind_group: None,
             custom_uniforms: HashMap::new(),
+            uniform_slots: Vec::new(),
+            target_fps: Some(60.0),
             width: 0,
             height: 0,
             frame_count: 0,
@@ -231,6 +311,8 @@ impl ShaderRenderer {
             uniform_buffer: None,
             bind_group: None,
             custom_uniforms: HashMap::new(),
+            uniform_slots: Vec::new(),
+            target_fps: Some(60.0),
             width: 0,
             height: 0,
             frame_count: 0,
@@ -246,6 +328,8 @@ impl ShaderRenderer {
             uniform_buffer: None,
             bind_group: None,
             custom_uniforms: HashMap::new(),
+            uniform_slots: Vec::new(),
+            target_fps: Some(60.0),
             width: 0,
             height: 0,
             frame_count: 0,
@@ -276,6 +360,25 @@ impl ShaderRenderer {
         let content = std::fs::read_to_string(&full_path)
             .map_err(|e| ShaderError::Io(full_path.clone(), e))?;
 
+        let mut uniform_slots = Vec::new();
+        if let Some(mapping) = &shader_config.uniform_mapping {
+            uniform_slots.extend(mapping.iter().take(11).cloned());
+        } else {
+            let mut named: Vec<String> = shader_config.uniforms.keys().cloned().collect();
+            named.sort();
+            for k in named {
+                if !uniform_slots.contains(&k) && uniform_slots.len() < 11 {
+                    uniform_slots.push(k);
+                }
+            }
+        }
+
+        let target_fps = match shader_config.fps {
+            Some(0) => None,
+            Some(f) => Some(f as f64),
+            None => Some(60.0),
+        };
+
         Ok(Self {
             entry_path: Some(full_path),
             raw_source: Some(content),
@@ -284,6 +387,8 @@ impl ShaderRenderer {
             uniform_buffer: None,
             bind_group: None,
             custom_uniforms: shader_config.uniforms.clone(),
+            uniform_slots,
+            target_fps,
             width: 0,
             height: 0,
             frame_count: 0,
@@ -312,7 +417,7 @@ impl WallpaperRenderer for ShaderRenderer {
                 .map_err(|e| RendererError::InitFailed(format!("GLSL translation failed: {e}")))?;
             (wgsl, "main".to_string())
         } else {
-            let prepared = prepare_wgsl(source);
+            let prepared = prepare_wgsl_with_uniforms(source, &self.uniform_slots);
             let ep = if prepared.contains("fn fs_main") {
                 "fs_main"
             } else if prepared.contains("fn main") {
@@ -389,13 +494,13 @@ impl WallpaperRenderer for ShaderRenderer {
             0.016,
             [0.0; 4],
             0,
-            [0.0, 0.0, 0.0],
+            &[0.0; 11],
             &default_audio,
             None,
         );
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("shader_uniform_buffer"),
-            size: 192,
+            size: 224,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -441,9 +546,21 @@ impl WallpaperRenderer for ShaderRenderer {
         };
         let mouse = [mouse_x, mouse_y, 0.0, 0.0];
 
-        let c0 = self.custom_uniforms.get("custom0").copied().unwrap_or(0.0);
-        let c1 = self.custom_uniforms.get("custom1").copied().unwrap_or(0.0);
-        let c2 = self.custom_uniforms.get("custom2").copied().unwrap_or(0.0);
+        let mut custom_values = [0.0f32; 11];
+        if let Some(&val) = self.custom_uniforms.get("custom0") {
+            custom_values[0] = val;
+        }
+        if let Some(&val) = self.custom_uniforms.get("custom1") {
+            custom_values[1] = val;
+        }
+        if let Some(&val) = self.custom_uniforms.get("custom2") {
+            custom_values[2] = val;
+        }
+        for (idx, name) in self.uniform_slots.iter().enumerate().take(11) {
+            if let Some(&val) = self.custom_uniforms.get(name) {
+                custom_values[idx] = val;
+            }
+        }
 
         let audio_metrics = ctx
             .spectrum
@@ -455,7 +572,7 @@ impl WallpaperRenderer for ShaderRenderer {
             dt,
             mouse,
             self.frame_count,
-            [c0, c1, c2],
+            &custom_values,
             &audio_metrics,
             ctx.spectrum,
         );
@@ -490,13 +607,26 @@ impl WallpaperRenderer for ShaderRenderer {
     }
 
     fn set_property(&mut self, key: &str, value: PropertyValue) -> Result<(), RendererError> {
+        if key == "fps"
+            && let PropertyValue::Number(num) = value
+        {
+            self.target_fps = if num <= 0.0 { None } else { Some(num as f64) };
+            return Ok(());
+        }
         if let PropertyValue::Number(num) = value {
+            if !self.uniform_slots.contains(&key.to_string()) && self.uniform_slots.len() < 11 {
+                self.uniform_slots.push(key.to_string());
+            }
             self.custom_uniforms.insert(key.to_string(), num);
             return Ok(());
         }
         Err(RendererError::InvalidPropertyValue(
             "Shader custom properties must be floating point numbers".into(),
         ))
+    }
+
+    fn target_fps(&self) -> Option<f64> {
+        self.target_fps
     }
 
     fn wants_pointer(&self) -> bool {
@@ -537,23 +667,30 @@ mod tests {
         bands[15] = 0.55;
         bands[31] = 0.25;
 
+        let custom_vals = [
+            1.23, 4.56, 7.89, // custom0..2
+            0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, // custom_extra
+        ];
+
         let bytes = uniform_bytes(
             [1920.0, 1080.0],
             10.5,
             0.016,
             [100.0, 200.0, 0.0, 0.0],
             42,
-            [1.23, 4.56, 7.89],
+            &custom_vals,
             &metrics,
             Some(&bands),
         );
-        assert_eq!(bytes.len(), 192);
+        assert_eq!(bytes.len(), 224);
 
         let w = f32::from_ne_bytes(bytes[0..4].try_into().unwrap());
         let h = f32::from_ne_bytes(bytes[4..8].try_into().unwrap());
         let time = f32::from_ne_bytes(bytes[8..12].try_into().unwrap());
         let frame = u32::from_ne_bytes(bytes[32..36].try_into().unwrap());
         let c0 = f32::from_ne_bytes(bytes[36..40].try_into().unwrap());
+        let c1 = f32::from_ne_bytes(bytes[40..44].try_into().unwrap());
+        let c2 = f32::from_ne_bytes(bytes[44..48].try_into().unwrap());
         let bass = f32::from_ne_bytes(bytes[48..52].try_into().unwrap());
         let mid = f32::from_ne_bytes(bytes[52..56].try_into().unwrap());
         let treble = f32::from_ne_bytes(bytes[56..60].try_into().unwrap());
@@ -562,11 +699,17 @@ mod tests {
         let b15 = f32::from_ne_bytes(bytes[64 + 15 * 4..64 + 16 * 4].try_into().unwrap());
         let b31 = f32::from_ne_bytes(bytes[64 + 31 * 4..64 + 32 * 4].try_into().unwrap());
 
+        // Check custom_extra at offset 192..224
+        let extra0 = f32::from_ne_bytes(bytes[192..196].try_into().unwrap());
+        let extra7 = f32::from_ne_bytes(bytes[192 + 7 * 4..192 + 8 * 4].try_into().unwrap());
+
         assert_eq!(w, 1920.0);
         assert_eq!(h, 1080.0);
         assert_eq!(time, 10.5);
         assert_eq!(frame, 42);
         assert!((c0 - 1.23).abs() < 1e-5);
+        assert!((c1 - 4.56).abs() < 1e-5);
+        assert!((c2 - 7.89).abs() < 1e-5);
         assert_eq!(bass, 0.95);
         assert_eq!(mid, 0.55);
         assert_eq!(treble, 0.25);
@@ -574,6 +717,47 @@ mod tests {
         assert_eq!(b0, 0.95);
         assert_eq!(b15, 0.55);
         assert_eq!(b31, 0.25);
+        assert!((extra0 - 0.1).abs() < 1e-5);
+        assert!((extra7 - 0.8).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_shader_target_fps_and_dynamic_uniforms() {
+        let mut renderer = ShaderRenderer::new();
+        // Default target_fps is 60.0
+        assert_eq!(renderer.target_fps(), Some(60.0));
+
+        // Setting fps property dynamically
+        renderer
+            .set_property("fps", PropertyValue::Number(30.0))
+            .unwrap();
+        assert_eq!(renderer.target_fps(), Some(30.0));
+
+        renderer
+            .set_property("fps", PropertyValue::Number(0.0))
+            .unwrap();
+        assert_eq!(renderer.target_fps(), None);
+
+        // Setting named properties
+        renderer
+            .set_property("speed", PropertyValue::Number(2.5))
+            .unwrap();
+        renderer
+            .set_property("glow", PropertyValue::Number(0.8))
+            .unwrap();
+
+        assert_eq!(renderer.custom_uniforms.get("speed"), Some(&2.5));
+        assert_eq!(renderer.custom_uniforms.get("glow"), Some(&0.8));
+        assert!(renderer.uniform_slots.contains(&"speed".to_string()));
+        assert!(renderer.uniform_slots.contains(&"glow".to_string()));
+
+        // Injected named helpers
+        let wgsl_helpers = prepare_wgsl_with_uniforms(
+            "@fragment fn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(speed(), glow(), 0.0, 1.0); }",
+            &renderer.uniform_slots,
+        );
+        assert!(wgsl_helpers.contains("fn speed() -> f32"));
+        assert!(wgsl_helpers.contains("fn glow() -> f32"));
     }
 
     #[test]

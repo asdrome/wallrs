@@ -34,6 +34,7 @@ struct ShaderUniforms {
     audio_treble: f32,
     audio_volume: f32,
     audio_spectrum: array<vec4<f32>, 8>,
+    custom_extra: array<vec4<f32>, 2>,
 };
 
 @group(0) @binding(0)

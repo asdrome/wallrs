@@ -162,49 +162,9 @@ struct TargetOutputArgs {
     output: Option<String>,
 }
 
-/// Parses a hex color string (3, 4, 6, or 8 hex digits, optional leading '#') into RGBA f32 [0.0..1.0].
+/// Parses a hex or RGBA color string into RGBA f32 [0.0..1.0].
 pub fn parse_hex_color(s: &str) -> Result<[f32; 4], String> {
-    let clean = s.trim().trim_start_matches('#');
-    let (r, g, b, a) = match clean.len() {
-        3 => {
-            let r = u8::from_str_radix(&clean[0..1], 16).map_err(|e| e.to_string())? * 17;
-            let g = u8::from_str_radix(&clean[1..2], 16).map_err(|e| e.to_string())? * 17;
-            let b = u8::from_str_radix(&clean[2..3], 16).map_err(|e| e.to_string())? * 17;
-            (r, g, b, 255)
-        }
-        4 => {
-            let r = u8::from_str_radix(&clean[0..1], 16).map_err(|e| e.to_string())? * 17;
-            let g = u8::from_str_radix(&clean[1..2], 16).map_err(|e| e.to_string())? * 17;
-            let b = u8::from_str_radix(&clean[2..3], 16).map_err(|e| e.to_string())? * 17;
-            let a = u8::from_str_radix(&clean[3..4], 16).map_err(|e| e.to_string())? * 17;
-            (r, g, b, a)
-        }
-        6 => {
-            let r = u8::from_str_radix(&clean[0..2], 16).map_err(|e| e.to_string())?;
-            let g = u8::from_str_radix(&clean[2..4], 16).map_err(|e| e.to_string())?;
-            let b = u8::from_str_radix(&clean[4..6], 16).map_err(|e| e.to_string())?;
-            (r, g, b, 255)
-        }
-        8 => {
-            let r = u8::from_str_radix(&clean[0..2], 16).map_err(|e| e.to_string())?;
-            let g = u8::from_str_radix(&clean[2..4], 16).map_err(|e| e.to_string())?;
-            let b = u8::from_str_radix(&clean[4..6], 16).map_err(|e| e.to_string())?;
-            let a = u8::from_str_radix(&clean[6..8], 16).map_err(|e| e.to_string())?;
-            (r, g, b, a)
-        }
-        _ => {
-            return Err(format!(
-                "Invalid hex color '{s}': expected 3, 4, 6, or 8 hex digits"
-            ));
-        }
-    };
-
-    Ok([
-        r as f32 / 255.0,
-        g as f32 / 255.0,
-        b as f32 / 255.0,
-        a as f32 / 255.0,
-    ])
+    wallrs_proto::parse_color(s).map_err(|e| e.to_string())
 }
 
 /// Infers the `PropertyValue` type from a string representation.
@@ -457,9 +417,6 @@ fn run() -> Result<(), String> {
         return handle_preview(&socket_path, args);
     }
 
-    let mut unmute_after = false;
-    let mut unmute_selector = OutputSelector::All;
-
     let (cmd, expect_json) = match cli.command {
         Subcommands::ListOutputs(args) => (Command::ListOutputs, args.json),
         Subcommands::SetColor(args) => {
@@ -510,34 +467,18 @@ fn run() -> Result<(), String> {
             },
             false,
         ),
-        Subcommands::Mute(args) => {
-            let selector = match args.output {
-                Some(name) => OutputSelector::Named(name),
-                None => OutputSelector::All,
-            };
-            (
-                Command::SetProperty {
-                    output: selector,
-                    key: "mute".into(),
-                    value: PropertyValue::Bool(true),
-                },
-                false,
-            )
-        }
-        Subcommands::Unmute(args) => {
-            let selector = match args.output {
-                Some(name) => OutputSelector::Named(name),
-                None => OutputSelector::All,
-            };
-            (
-                Command::SetProperty {
-                    output: selector,
-                    key: "mute".into(),
-                    value: PropertyValue::Bool(false),
-                },
-                false,
-            )
-        }
+        Subcommands::Mute(args) => (
+            Command::Mute {
+                output: args.output,
+            },
+            false,
+        ),
+        Subcommands::Unmute(args) => (
+            Command::Unmute {
+                output: args.output,
+            },
+            false,
+        ),
         Subcommands::ToggleMute(args) => (
             Command::ToggleMute {
                 output: args.output,
@@ -550,14 +491,11 @@ fn run() -> Result<(), String> {
                 Some(name) => OutputSelector::Named(name),
                 None => OutputSelector::All,
             };
-            if args.unmute {
-                unmute_after = true;
-                unmute_selector = selector.clone();
-            }
             (
                 Command::SetWallpaper {
                     output: selector,
                     manifest_path: canonical,
+                    unmute: args.unmute,
                 },
                 false,
             )
@@ -577,17 +515,6 @@ fn run() -> Result<(), String> {
 
     match resp {
         Response::Ok => {
-            if unmute_after {
-                let unmute_cmd = Command::SetProperty {
-                    output: unmute_selector,
-                    key: "mute".into(),
-                    value: PropertyValue::Bool(false),
-                };
-                let resp2 = send_command(&socket_path, &unmute_cmd)?;
-                if let Response::Error(err) = resp2 {
-                    return Err(format!("Wallpaper loaded, but failed to unmute: {err}"));
-                }
-            }
             println!("OK");
             Ok(())
         }

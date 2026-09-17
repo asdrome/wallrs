@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-09-16
+
+### Added
+- **Dynamic Named Shader Uniforms**: Authors can now define arbitrary property names in `[shader.uniforms]` (e.g. `speed = 1.0`, `glow = 0.5`) and specify optional slot ordering via `[shader] uniform_mapping`. `wallrs` auto-injects helper functions directly into WGSL (e.g. `fn speed() -> f32`), enabling seamless shader access. Properties can be tuned at runtime via `wallctl set-property <name> <val>`.
+- **Shader Framerate Ceiling (`fps` / `target_fps`)**: Added configurable `fps = <u32>` ceiling to `[shader]` in `wallpaper.toml` (defaults to 60 FPS ceiling, `0` for uncapped), preventing GPU and thermal waste on 144Hz–240Hz displays. Can also be adjusted on the fly with `wallctl set-property fps <num>`.
+- **Unified Color Parser (`wallrs-proto`)**: Centralized `wallrs_proto::parse_color` across `wallrs-cli` and `wallrs-daemon`, with support for `#RGB`, `#RGBA`, `#RRGGBB`, `#RRGGBBAA`, bare hex values, and comma-separated floats `r,g,b[,a]`.
+- **Dedicated IPC `Mute` / `Unmute` Commands**: Added explicit `Command::Mute` and `Command::Unmute` socket messages to control audio output deterministically without manual boolean toggles.
+- **Atomic `--unmute` on Set Wallpaper**: Integrated `unmute: bool` directly into `Command::SetWallpaper`. Applying a wallpaper with `wallctl set <path> --unmute` now executes atomically in a single IPC transaction without a second socket call.
+
+### Changed
+- **Extended Shader Uniform Buffer (224 bytes)**: Appended `custom_extra: array<vec4<f32>, 2>` (slots 3 to 10) to the standard uniform layout at offset 192, ensuring 100% backward compatibility with 192-byte shaders while expanding custom uniform capacity to 11 float parameters.
+
 ## [1.1.4] - 2026-09-11
 
 ### Performance
