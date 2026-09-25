@@ -217,6 +217,41 @@ pub(crate) fn color_params_from_video_info(info: &gst_video::VideoInfo, is_srgb:
     [y_offset, y_scale, uv_offset, r_v, g_u, g_v, b_u, to_linear]
 }
 
+/// Determines whether a GStreamer element is a genuine VA-API hardware video decoder.
+///
+/// Used to dynamically decide whether `vapostproc` should be injected as `video-filter`.
+/// On non-VA decoders (such as NVIDIA `nvdec`, software `avdec`, or `openh264`), injecting
+/// `vapostproc` causes pipeline negotiation errors, severe CPU/GPU copy overhead, or crashes.
+pub(crate) fn is_vaapi_decoder(elem: &gst::Element) -> bool {
+    let Some(factory) = elem.factory() else {
+        return false;
+    };
+    let klass = factory.klass();
+    if !klass.contains("Decoder") || !klass.contains("Video") {
+        return false;
+    }
+    let name = factory.name();
+    let is_va_name = name.starts_with("va") || name.starts_with("vaapi");
+    let is_va_plugin = factory
+        .plugin()
+        .map(|p| p.name() == "va" || p.name() == "vaapi")
+        .unwrap_or(false);
+
+    is_va_name || is_va_plugin
+}
+
+/// Checks whether `vapostproc` is available on the system and capable of acquiring
+/// a valid VA-API hardware display context (e.g. via `/dev/dri/renderD128`).
+pub(crate) fn is_vapostproc_usable() -> bool {
+    if let Ok(filter) = gst::ElementFactory::make("vapostproc").build()
+        && filter.set_state(gst::State::Ready).is_ok()
+    {
+        let _ = filter.set_state(gst::State::Null);
+        return true;
+    }
+    false
+}
+
 /// Video wallpaper renderer powered by GStreamer (appsink hardware/software decoding).
 pub struct VideoRenderer {
     pipeline: Option<gst::Element>,
@@ -338,34 +373,51 @@ impl VideoRenderer {
         playbin.set_property("uri", uri.as_str());
 
         // Connect appsink directly as video-sink without intermediate bins or redundant queue threads.
-        // On VA-API hardware, set vapostproc as playbin's video-filter for direct GPU downscaling/conversion.
-        if let Ok(vapostproc) = gst::ElementFactory::make("vapostproc").build() {
-            playbin.set_property("video-filter", &vapostproc);
-        }
         playbin.set_property("video-sink", &appsink);
 
         let clamped_volume = volume.clamp(0.0, 100.0);
         let has_audio = clamped_volume > 0.0;
 
-        if !has_audio {
-            // For silent playback, configure uridecodebin and decodebin to completely skip
-            // audio parsing, demuxing queues, and decoder instantiation (e.g. avdec_aac).
-            playbin.connect("element-setup", false, |args| {
-                if let Some(elem) = args.get(1).and_then(|v| v.get::<gst::Element>().ok()) {
-                    let fac_name = elem
-                        .factory()
-                        .map(|f| f.name().to_string())
-                        .unwrap_or_default();
-                    if (fac_name == "uridecodebin" || fac_name == "decodebin")
-                        && let Ok(video_any) = gst::Caps::from_str("video/x-raw(ANY)")
-                    {
-                        elem.set_property("caps", &video_any);
-                        elem.set_property("expose-all-streams", false);
-                    }
-                }
-                None
-            });
-        }
+        // Configure element-setup to:
+        // 1. Prune unused audio parsing/decoding streams when muted/silent.
+        // 2. Intelligently inject vapostproc (Task 5.1) ONLY when a genuine VA-API hardware decoder
+        //    is active and capable of acquiring the hardware display context.
+        // On NVIDIA (nvdec), software (avdec), or systems without VA-API, video-filter remains unset,
+        // avoiding cross-device conflicts, upload/download roundtrips, and pipeline negotiation failures.
+        playbin.connect("element-setup", false, move |args| {
+            let playbin = args.first().and_then(|v| v.get::<gst::Element>().ok())?;
+            let elem = args.get(1).and_then(|v| v.get::<gst::Element>().ok())?;
+
+            let fac = elem.factory();
+            let fac_name = fac
+                .as_ref()
+                .map(|f| f.name().to_string())
+                .unwrap_or_default();
+
+            if !has_audio
+                && (fac_name == "uridecodebin" || fac_name == "decodebin")
+                && let Ok(video_any) = gst::Caps::from_str("video/x-raw(ANY)")
+            {
+                elem.set_property("caps", &video_any);
+                elem.set_property("expose-all-streams", false);
+            }
+
+            if is_vaapi_decoder(&elem)
+                && playbin
+                    .property::<Option<gst::Element>>("video-filter")
+                    .is_none()
+                && is_vapostproc_usable()
+                && let Ok(vapostproc) = gst::ElementFactory::make("vapostproc").build()
+            {
+                tracing::info!(
+                    decoder = %fac_name,
+                    "Intelligently injected vapostproc video-filter for VA-API hardware pipeline"
+                );
+                playbin.set_property("video-filter", &vapostproc);
+            }
+
+            None
+        });
 
         if has_audio {
             playbin.set_property_from_str("flags", "video+audio+soft-volume");
@@ -1117,5 +1169,50 @@ mod tests {
         assert_eq!(renderer.video_path(), Some(dummy_video.as_path()));
 
         let _ = std::fs::remove_file(dummy_video);
+    }
+
+    #[test]
+    fn test_is_vaapi_decoder_classification() {
+        gst::init().unwrap();
+
+        // Non-decoder elements must never be classified as VA-API decoders
+        if let Ok(elem) = gst::ElementFactory::make("videotestsrc").build() {
+            assert!(!is_vaapi_decoder(&elem));
+        }
+        if let Ok(elem) = gst::ElementFactory::make("capsfilter").build() {
+            assert!(!is_vaapi_decoder(&elem));
+        }
+        if let Ok(elem) = gst::ElementFactory::make("vapostproc").build() {
+            assert!(!is_vaapi_decoder(&elem));
+        }
+        if let Ok(elem) = gst::ElementFactory::make("appsink").build() {
+            assert!(!is_vaapi_decoder(&elem));
+        }
+
+        // Software decoders must NOT be classified as VA-API decoders
+        if let Ok(elem) = gst::ElementFactory::make("avdec_h264").build() {
+            assert!(!is_vaapi_decoder(&elem));
+        }
+        if let Ok(elem) = gst::ElementFactory::make("openh264dec").build() {
+            assert!(!is_vaapi_decoder(&elem));
+        }
+
+        // VA-API decoders (if present in the GStreamer registry) must be classified as true
+        for va_name in &["vah264dec", "vaapih264dec", "vahevcdec", "vavp9dec"] {
+            if let Ok(elem) = gst::ElementFactory::make(va_name).build() {
+                assert!(
+                    is_vaapi_decoder(&elem),
+                    "Expected {} to be classified as VA-API decoder",
+                    va_name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_vapostproc_usability_check() {
+        gst::init().unwrap();
+        // Verifies that is_vapostproc_usable runs cleanly without crashing or panicking
+        let _ = is_vapostproc_usable();
     }
 }

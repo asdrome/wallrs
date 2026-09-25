@@ -59,26 +59,39 @@ fn main() {
     playbin.set_property("uri", uri.as_str());
 
     playbin.set_property("video-sink", &appsink);
-    if let Ok(filter) = gst::ElementFactory::make("vapostproc").build() {
-        playbin.set_property("video-filter", &filter);
-    }
     playbin.set_property_from_str("flags", "video");
     if let Ok(fakesink) = gst::ElementFactory::make("fakesink").build() {
         playbin.set_property("audio-sink", &fakesink);
     }
 
     playbin.connect("element-setup", false, |args| {
-        if let Some(elem) = args.get(1).and_then(|v| v.get::<gst::Element>().ok()) {
-            let fac_name = elem
-                .factory()
-                .map(|f| f.name().to_string())
-                .unwrap_or_default();
-            if (fac_name == "uridecodebin" || fac_name == "decodebin")
-                && let Ok(video_any) = gst::Caps::from_str("video/x-raw(ANY)")
-            {
-                elem.set_property("caps", &video_any);
-                elem.set_property("expose-all-streams", false);
-            }
+        let pb = args.first().and_then(|v| v.get::<gst::Element>().ok())?;
+        let elem = args.get(1).and_then(|v| v.get::<gst::Element>().ok())?;
+        let fac = elem.factory();
+        let fac_name = fac
+            .as_ref()
+            .map(|f| f.name().to_string())
+            .unwrap_or_default();
+        if (fac_name == "uridecodebin" || fac_name == "decodebin")
+            && let Ok(video_any) = gst::Caps::from_str("video/x-raw(ANY)")
+        {
+            elem.set_property("caps", &video_any);
+            elem.set_property("expose-all-streams", false);
+        }
+
+        let klass = fac.as_ref().map(|f| f.klass()).unwrap_or_default();
+        let is_va = klass.contains("Decoder")
+            && klass.contains("Video")
+            && (fac_name.starts_with("va") || fac_name.starts_with("vaapi"));
+        if is_va
+            && pb
+                .property::<Option<gst::Element>>("video-filter")
+                .is_none()
+            && let Ok(vapostproc) = gst::ElementFactory::make("vapostproc").build()
+            && vapostproc.set_state(gst::State::Ready).is_ok()
+        {
+            let _ = vapostproc.set_state(gst::State::Null);
+            pb.set_property("video-filter", &vapostproc);
         }
         None
     });
