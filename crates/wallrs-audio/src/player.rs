@@ -51,15 +51,15 @@ impl BackgroundAudioPlayer {
         let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
         let uri = format!("file://{}", canonical.display());
 
-        // Attempt playbin3, falling back to playbin
-        let playbin = gst::ElementFactory::make("playbin3")
+        // Attempt playbin (classic, lean thread model), falling back to playbin3
+        let playbin = gst::ElementFactory::make("playbin")
             .build()
-            .or_else(|_| gst::ElementFactory::make("playbin").build())
+            .or_else(|_| gst::ElementFactory::make("playbin3").build())
             .map_err(|e| AudioPlayerError::PipelineCreate(e.to_string()))?;
 
         playbin.set_property("uri", uri.as_str());
         // Configure headless audio-only flags (skip video decoders, parsers, subtitles)
-        playbin.set_property_from_str("flags", "audio+soft-volume+buffering");
+        playbin.set_property_from_str("flags", "audio+soft-volume");
 
         // Configure headless audio-only sinks
         if let Ok(video_sink) = gst::ElementFactory::make("fakesink").build() {

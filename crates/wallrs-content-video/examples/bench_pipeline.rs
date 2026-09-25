@@ -2,6 +2,7 @@ use gst::prelude::*;
 use gstreamer as gst;
 use gstreamer_app as gst_app;
 use gstreamer_video as gst_video;
+use std::str::FromStr;
 use std::time::{Duration, Instant};
 
 /// Reads total user + system CPU time in seconds for the current process from `/proc/self/stat`.
@@ -38,7 +39,7 @@ fn main() {
     let uri = format!("file://{}", canonical.display());
 
     let video_caps = gst::Caps::builder("video/x-raw")
-        .field("format", "RGBA")
+        .field("format", "NV12")
         .field("width", gst::IntRange::new(1, 1920i32))
         .field("height", gst::IntRange::new(1, 1080i32))
         .build();
@@ -50,40 +51,37 @@ fn main() {
         .sync(true)
         .build();
 
-    let playbin = gst::ElementFactory::make("playbin3")
+    let playbin = gst::ElementFactory::make("playbin")
         .build()
-        .or_else(|_| gst::ElementFactory::make("playbin").build())
+        .or_else(|_| gst::ElementFactory::make("playbin3").build())
         .expect("Failed to create playbin element");
 
     playbin.set_property("uri", uri.as_str());
 
-    // Build hardware-accelerated video sink bin
-    let bin = gst::Bin::new();
-    let vapostproc = gst::ElementFactory::make("vapostproc")
-        .build()
-        .expect("Failed to create vapostproc");
-
-    bin.add_many([&vapostproc, appsink.upcast_ref()])
-        .expect("Failed to add elements to sink bin");
-
-    gst::Element::link_many([&vapostproc, appsink.upcast_ref()])
-        .expect("Failed to link elements in sink bin");
-
-    let sink_pad = vapostproc
-        .static_pad("sink")
-        .expect("vapostproc missing sink pad");
-    let ghost_pad = gst::GhostPad::with_target(&sink_pad).expect("Failed to create ghost pad");
-    ghost_pad
-        .set_active(true)
-        .expect("Failed to activate ghost pad");
-    bin.add_pad(&ghost_pad)
-        .expect("Failed to add ghost pad to bin");
-
-    playbin.set_property("video-sink", &bin);
-    playbin.set_property_from_str("flags", "video+buffering");
+    playbin.set_property("video-sink", &appsink);
+    if let Ok(filter) = gst::ElementFactory::make("vapostproc").build() {
+        playbin.set_property("video-filter", &filter);
+    }
+    playbin.set_property_from_str("flags", "video");
     if let Ok(fakesink) = gst::ElementFactory::make("fakesink").build() {
         playbin.set_property("audio-sink", &fakesink);
     }
+
+    playbin.connect("element-setup", false, |args| {
+        if let Some(elem) = args.get(1).and_then(|v| v.get::<gst::Element>().ok()) {
+            let fac_name = elem
+                .factory()
+                .map(|f| f.name().to_string())
+                .unwrap_or_default();
+            if (fac_name == "uridecodebin" || fac_name == "decodebin")
+                && let Ok(video_any) = gst::Caps::from_str("video/x-raw(ANY)")
+            {
+                elem.set_property("caps", &video_any);
+                elem.set_property("expose-all-streams", false);
+            }
+        }
+        None
+    });
 
     let bus = playbin.bus().expect("Failed to acquire bus");
     if let Err(e) = playbin.set_state(gst::State::Playing) {
@@ -108,12 +106,29 @@ fn main() {
         std::thread::sleep(Duration::from_millis(16));
 
         while let Some(msg) = bus.pop() {
-            if let gst::MessageView::Eos(..) = msg.view() {
-                let _ = playbin.seek_simple(
-                    gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT,
-                    gst::ClockTime::ZERO,
-                );
-                loops += 1;
+            match msg.view() {
+                gst::MessageView::Eos(..) => {
+                    let _ = playbin.seek_simple(
+                        gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT,
+                        gst::ClockTime::ZERO,
+                    );
+                    loops += 1;
+                }
+                gst::MessageView::Error(err) => {
+                    eprintln!(
+                        "Pipeline Bus Error: {} (debug: {:?})",
+                        err.error(),
+                        err.debug()
+                    );
+                }
+                gst::MessageView::Warning(warn) => {
+                    eprintln!(
+                        "Pipeline Bus Warning: {} (debug: {:?})",
+                        warn.error(),
+                        warn.debug()
+                    );
+                }
+                _ => {}
             }
         }
 
@@ -122,6 +137,7 @@ fn main() {
                 && let Some(caps) = sample.caps()
                 && let Ok(vi) = gst_video::VideoInfo::from_caps(caps)
             {
+                println!("Negotiated caps: {caps}");
                 println!(
                     "Negotiated sample resolution: {}x{}",
                     vi.width(),
@@ -133,6 +149,13 @@ fn main() {
                 }
             }
             samples += 1;
+            if let (Some(buf), Some(caps)) = (sample.buffer(), sample.caps())
+                && let Ok(vi) = gst_video::VideoInfo::from_caps(caps)
+                && let Ok(vf) = gst_video::VideoFrameRef::from_buffer_ref_readable(buf, &vi)
+                && let Ok(data) = vf.plane_data(0)
+            {
+                std::hint::black_box(data[0]);
+            }
         }
     }
 

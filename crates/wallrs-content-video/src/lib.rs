@@ -4,6 +4,7 @@ use gstreamer as gst;
 use gstreamer_app as gst_app;
 use gstreamer_video as gst_video;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use thiserror::Error;
 use wallrs_proto::{PropertyValue, WallpaperManifest};
 use wallrs_render::{FrameContext, RendererError, WallpaperRenderer};
@@ -85,10 +86,21 @@ struct VertexOutput {
 };
 
 @group(0) @binding(0)
-var t_video: texture_2d<f32>;
+var t_y: texture_2d<f32>;
 
 @group(0) @binding(1)
+var t_uv: texture_2d<f32>;
+
+@group(0) @binding(2)
 var s_video: sampler;
+
+struct ColorParams {
+    y_uv_params: vec4<f32>,   // x: y_offset, y: y_scale, z: uv_offset, w: r_coeff_v
+    matrix_params: vec4<f32>, // x: g_coeff_u, y: g_coeff_v, z: b_coeff_u, w: to_linear
+};
+
+@group(0) @binding(3)
+var<uniform> u_color: ColorParams;
 
 @vertex
 fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
@@ -109,9 +121,101 @@ fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return textureSample(t_video, s_video, in.uv);
+    let y_raw = textureSample(t_y, s_video, in.uv).r;
+    let uv_raw = textureSample(t_uv, s_video, in.uv).rg;
+
+    var y_offset = u_color.y_uv_params.x;
+    var y_scale = u_color.y_uv_params.y;
+    var uv_offset = u_color.y_uv_params.z;
+    var r_v = u_color.y_uv_params.w;
+    var g_u = u_color.matrix_params.x;
+    var g_v = u_color.matrix_params.y;
+    var b_u = u_color.matrix_params.z;
+    var to_linear = u_color.matrix_params.w;
+
+    // Fail-safe: if uniform is uninitialized or 0, fallback to BT.709 studio range + linear
+    if (y_scale <= 0.001) {
+        y_offset = 0.06274510;
+        y_scale = 1.16438356;
+        uv_offset = 0.50196078;
+        r_v = 1.79274107;
+        g_u = 0.21324861;
+        g_v = 0.53290933;
+        b_u = 2.11240179;
+        to_linear = 1.0;
+    }
+
+    let y = clamp((y_raw - y_offset) * y_scale, 0.0, 1.0);
+    let u = uv_raw.x - uv_offset;
+    let v = uv_raw.y - uv_offset;
+
+    var r = clamp(y + r_v * v, 0.0, 1.0);
+    var g = clamp(y - g_u * u - g_v * v, 0.0, 1.0);
+    var b = clamp(y + b_u * u, 0.0, 1.0);
+
+    // If writing to an sRGB render target, the GPU ROP automatically applies
+    // the sRGB gamma transfer function on write. Convert the gamma-encoded video
+    // RGB to linear space to prevent double-gamma (washed out / milky look).
+    if (to_linear > 0.5) {
+        if (r > 0.04045) {
+            r = pow((r + 0.055) / 1.055, 2.4);
+        } else {
+            r = r / 12.92;
+        }
+        if (g > 0.04045) {
+            g = pow((g + 0.055) / 1.055, 2.4);
+        } else {
+            g = g / 12.92;
+        }
+        if (b > 0.04045) {
+            b = pow((b + 0.055) / 1.055, 2.4);
+        } else {
+            b = b / 12.92;
+        }
+    }
+
+    return vec4<f32>(r, g, b, 1.0);
 }
 "#;
+
+/// Returns the default ITU-R BT.709 limited-range color conversion parameters.
+pub(crate) fn default_color_params(is_srgb: bool) -> [f32; 8] {
+    [
+        16.0 / 255.0,                    // y_offset (Limited range)
+        255.0 / 219.0,                   // y_scale
+        128.0 / 255.0,                   // uv_offset
+        1.7927411,                       // r_coeff_v (BT.709)
+        0.2132486,                       // g_coeff_u
+        0.5329093,                       // g_coeff_v
+        2.1124018,                       // b_coeff_u
+        if is_srgb { 1.0 } else { 0.0 }, // to_linear
+    ]
+}
+
+/// Dynamically calculates YUV to RGB color conversion parameters based on
+/// the video stream's negotiated color range (full vs limited/studio) and color matrix.
+pub(crate) fn color_params_from_video_info(info: &gst_video::VideoInfo, is_srgb: bool) -> [f32; 8] {
+    let colorimetry = info.colorimetry();
+    let is_full_range = colorimetry.range() == gst_video::VideoColorRange::Range0_255;
+    let is_bt601 = colorimetry.matrix() == gst_video::VideoColorMatrix::Bt601;
+
+    let (y_offset, y_scale, uv_offset) = if is_full_range {
+        (0.0, 1.0, 128.0 / 255.0)
+    } else {
+        (16.0 / 255.0, 255.0 / 219.0, 128.0 / 255.0)
+    };
+
+    let (r_v, g_u, g_v, b_u) = match (is_bt601, is_full_range) {
+        (true, true) => (1.4020, 0.344136, 0.714136, 1.7720),
+        (true, false) => (1.5960268, 0.3917623, 0.8129676, 2.0172321),
+        (false, true) => (1.57480, 0.187324, 0.468124, 1.85560),
+        (false, false) => (1.7927411, 0.2132486, 0.5329093, 2.1124018),
+    };
+
+    let to_linear = if is_srgb { 1.0 } else { 0.0 };
+
+    [y_offset, y_scale, uv_offset, r_v, g_u, g_v, b_u, to_linear]
+}
 
 /// Video wallpaper renderer powered by GStreamer (appsink hardware/software decoding).
 pub struct VideoRenderer {
@@ -125,8 +229,13 @@ pub struct VideoRenderer {
     height: u32,
     video_width: u32,
     video_height: u32,
-    texture: Option<wgpu::Texture>,
-    texture_view: Option<wgpu::TextureView>,
+    texture_y: Option<wgpu::Texture>,
+    texture_y_view: Option<wgpu::TextureView>,
+    texture_uv: Option<wgpu::Texture>,
+    texture_uv_view: Option<wgpu::TextureView>,
+    color_buffer: Option<wgpu::Buffer>,
+    cached_color_params: Option<[f32; 8]>,
+    target_is_srgb: bool,
     sampler: Option<wgpu::Sampler>,
     bind_group_layout: Option<wgpu::BindGroupLayout>,
     bind_group: Option<wgpu::BindGroup>,
@@ -136,71 +245,6 @@ pub struct VideoRenderer {
     cached_caps: Option<gst::Caps>,
     cached_video_info: Option<gst_video::VideoInfo>,
     is_paused: bool,
-}
-
-/// Builds an optimized video sink element.
-///
-/// On systems with VA-API hardware acceleration (Intel Gen Graphics / AMD),
-/// `vapostproc` converts decoded NV12/YUV video frames directly into RGBA
-/// on the GPU, avoiding CPU-intensive software color conversion and scaling.
-///
-/// If VA-API is unavailable, it gracefully falls back to a multithreaded CPU
-/// `videoscale` + `videoconvert` element (`n-threads=0`) feeding `appsink`.
-fn create_video_sink(appsink: &gst_app::AppSink) -> Result<gst::Element, VideoError> {
-    if gst::ElementFactory::find("vapostproc").is_some() {
-        let bin = gst::Bin::new();
-        let vapostproc = gst::ElementFactory::make("vapostproc")
-            .build()
-            .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
-
-        bin.add_many([&vapostproc, appsink.upcast_ref()])
-            .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
-
-        gst::Element::link_many([&vapostproc, appsink.upcast_ref()])
-            .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
-
-        let sink_pad = vapostproc
-            .static_pad("sink")
-            .ok_or_else(|| VideoError::PipelineCreate("vapostproc missing sink pad".into()))?;
-        let ghost_pad = gst::GhostPad::with_target(&sink_pad)
-            .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
-        ghost_pad
-            .set_active(true)
-            .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
-        bin.add_pad(&ghost_pad)
-            .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
-
-        return Ok(bin.upcast());
-    }
-
-    // Fallback path: multithreaded CPU videoscale + videoconvert directly feeding appsink
-    let bin = gst::Bin::new();
-    let videoscale = gst::ElementFactory::make("videoscale")
-        .property("n-threads", 0u32)
-        .build()
-        .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
-    let videoconvert = gst::ElementFactory::make("videoconvert")
-        .property("n-threads", 0u32)
-        .build()
-        .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
-
-    bin.add_many([&videoscale, &videoconvert, appsink.upcast_ref()])
-        .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
-    gst::Element::link_many([&videoscale, &videoconvert, appsink.upcast_ref()])
-        .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
-
-    let sink_pad = videoscale
-        .static_pad("sink")
-        .ok_or_else(|| VideoError::PipelineCreate("videoscale missing sink pad".into()))?;
-    let ghost_pad = gst::GhostPad::with_target(&sink_pad)
-        .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
-    ghost_pad
-        .set_active(true)
-        .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
-    bin.add_pad(&ghost_pad)
-        .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
-
-    Ok(bin.upcast())
 }
 
 // Safety: VideoRenderer owns the GStreamer elements, which are thread-safe and
@@ -227,8 +271,13 @@ impl VideoRenderer {
             height: 0,
             video_width: 0,
             video_height: 0,
-            texture: None,
-            texture_view: None,
+            texture_y: None,
+            texture_y_view: None,
+            texture_uv: None,
+            texture_uv_view: None,
+            color_buffer: None,
+            cached_color_params: None,
+            target_is_srgb: true,
             sampler: None,
             bind_group_layout: None,
             bind_group: None,
@@ -268,9 +317,9 @@ impl VideoRenderer {
         let canonical = std::fs::canonicalize(&full_path).unwrap_or_else(|_| full_path.clone());
         let uri = format!("file://{}", canonical.display());
 
-        // Configure video appsink with RGBA pixel caps
+        // Configure video appsink with native hardware NV12 pixel caps
         let video_caps = gst_video::VideoCapsBuilder::for_encoding("video/x-raw")
-            .format(gst_video::VideoFormat::Rgba)
+            .format(gst_video::VideoFormat::Nv12)
             .build();
 
         let appsink = gst_app::AppSink::builder()
@@ -280,22 +329,46 @@ impl VideoRenderer {
             .sync(true)
             .build();
 
-        let video_sink = create_video_sink(&appsink)?;
-
-        // Attempt playbin3, falling back to playbin
-        let playbin = gst::ElementFactory::make("playbin3")
+        // Attempt playbin (classic, lean thread model), falling back to playbin3
+        let playbin = gst::ElementFactory::make("playbin")
             .build()
-            .or_else(|_| gst::ElementFactory::make("playbin").build())
+            .or_else(|_| gst::ElementFactory::make("playbin3").build())
             .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
 
         playbin.set_property("uri", uri.as_str());
-        playbin.set_property("video-sink", &video_sink);
+
+        // Connect appsink directly as video-sink without intermediate bins or redundant queue threads.
+        // On VA-API hardware, set vapostproc as playbin's video-filter for direct GPU downscaling/conversion.
+        if let Ok(vapostproc) = gst::ElementFactory::make("vapostproc").build() {
+            playbin.set_property("video-filter", &vapostproc);
+        }
+        playbin.set_property("video-sink", &appsink);
 
         let clamped_volume = volume.clamp(0.0, 100.0);
         let has_audio = clamped_volume > 0.0;
 
+        if !has_audio {
+            // For silent playback, configure uridecodebin and decodebin to completely skip
+            // audio parsing, demuxing queues, and decoder instantiation (e.g. avdec_aac).
+            playbin.connect("element-setup", false, |args| {
+                if let Some(elem) = args.get(1).and_then(|v| v.get::<gst::Element>().ok()) {
+                    let fac_name = elem
+                        .factory()
+                        .map(|f| f.name().to_string())
+                        .unwrap_or_default();
+                    if (fac_name == "uridecodebin" || fac_name == "decodebin")
+                        && let Ok(video_any) = gst::Caps::from_str("video/x-raw(ANY)")
+                    {
+                        elem.set_property("caps", &video_any);
+                        elem.set_property("expose-all-streams", false);
+                    }
+                }
+                None
+            });
+        }
+
         if has_audio {
-            playbin.set_property_from_str("flags", "video+audio+soft-volume+buffering");
+            playbin.set_property_from_str("flags", "video+audio+soft-volume");
             let audio_sink = gst::ElementFactory::make("pipewiresink")
                 .build()
                 .or_else(|_| gst::ElementFactory::make("autoaudiosink").build())
@@ -306,9 +379,10 @@ impl VideoRenderer {
             playbin.set_property("volume", clamped_volume / 100.0);
             playbin.set_property("mute", false);
         } else {
-            // Highly optimized wallpaper mode: video-only decoding, buffering,
+            // Highly optimized wallpaper mode: video-only decoding,
             // no audio pipeline, no subtitle processing, no software deinterlacing/colorbalance.
-            playbin.set_property_from_str("flags", "video+buffering");
+            // Buffering flag omitted to prevent redundant queue threads for local files.
+            playbin.set_property_from_str("flags", "video");
             if let Ok(fakesink) = gst::ElementFactory::make("fakesink").build() {
                 playbin.set_property("audio-sink", &fakesink);
             }
@@ -330,8 +404,13 @@ impl VideoRenderer {
             height: 0,
             video_width: 0,
             video_height: 0,
-            texture: None,
-            texture_view: None,
+            texture_y: None,
+            texture_y_view: None,
+            texture_uv: None,
+            texture_uv_view: None,
+            color_buffer: None,
+            cached_color_params: None,
+            target_is_srgb: true,
             sampler: None,
             bind_group_layout: None,
             bind_group: None,
@@ -389,7 +468,27 @@ impl WallpaperRenderer for VideoRenderer {
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
                     count: None,
                 },
             ],
@@ -441,9 +540,27 @@ impl WallpaperRenderer for VideoRenderer {
             ..Default::default()
         });
 
+        self.target_is_srgb = target_format.is_srgb();
+
+        let color_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("video_color_params_buffer"),
+            size: 256,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let default_params = default_color_params(self.target_is_srgb);
+        let mut bytes = [0u8; 256];
+        for (i, f) in default_params.iter().enumerate() {
+            bytes[i * 4..(i + 1) * 4].copy_from_slice(&f.to_ne_bytes());
+        }
+        _queue.write_buffer(&color_buffer, 0, &bytes);
+
         self.pipeline_gpu = Some(pipeline);
         self.bind_group_layout = Some(bind_group_layout);
         self.sampler = Some(sampler);
+        self.color_buffer = Some(color_buffer);
+        self.cached_color_params = None;
 
         Ok(())
     }
@@ -463,7 +580,7 @@ impl WallpaperRenderer for VideoRenderer {
                 && let Some(appsink) = &self.appsink
             {
                 let video_caps = gst::Caps::builder("video/x-raw")
-                    .field("format", "RGBA")
+                    .field("format", "NV12")
                     .field("width", gst::IntRange::new(1, width as i32))
                     .field("height", gst::IntRange::new(1, height as i32))
                     .build();
@@ -529,17 +646,35 @@ impl WallpaperRenderer for VideoRenderer {
                 return;
             };
 
+            // Dynamically update color parameters uniform if colorimetry or format changed
+            let color_params = color_params_from_video_info(&video_info, self.target_is_srgb);
+            if self.cached_color_params != Some(color_params) {
+                self.cached_color_params = Some(color_params);
+                if let Some(buf) = &self.color_buffer {
+                    let mut bytes = [0u8; 256];
+                    for (i, f) in color_params.iter().enumerate() {
+                        bytes[i * 4..(i + 1) * 4].copy_from_slice(&f.to_ne_bytes());
+                    }
+                    ctx.queue.write_buffer(buf, 0, &bytes);
+                }
+            }
+
             if let Ok(video_frame) =
                 gst_video::VideoFrameRef::from_buffer_ref_readable(buffer, &video_info)
-                && let Ok(data) = video_frame.plane_data(0)
+                && let Ok(data_y) = video_frame.plane_data(0)
+                && let Ok(data_uv) = video_frame.plane_data(1)
             {
                 let w = video_info.width();
                 let h = video_info.height();
-                let stride = video_frame.plane_stride()[0] as u32;
+                let stride_y = video_frame.plane_stride()[0] as u32;
+                let stride_uv = video_frame.plane_stride()[1] as u32;
 
                 if w > 0 && h > 0 {
-                    // Recreate GPU texture if dimensions changed or first allocation
-                    if self.video_width != w || self.video_height != h || self.texture.is_none() {
+                    let uv_w = w.div_ceil(2);
+                    let uv_h = h.div_ceil(2);
+
+                    // Recreate GPU textures if dimensions changed or first allocation
+                    if self.video_width != w || self.video_height != h || self.texture_y.is_none() {
                         self.video_width = w;
                         self.video_height = h;
 
@@ -549,9 +684,12 @@ impl WallpaperRenderer for VideoRenderer {
                         let Some(sampler) = &self.sampler else {
                             return;
                         };
+                        let Some(color_buffer) = &self.color_buffer else {
+                            return;
+                        };
 
-                        let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
-                            label: Some("video_frame_texture"),
+                        let texture_y = ctx.device.create_texture(&wgpu::TextureDescriptor {
+                            label: Some("video_frame_texture_y"),
                             size: wgpu::Extent3d {
                                 width: w,
                                 height: h,
@@ -560,13 +698,31 @@ impl WallpaperRenderer for VideoRenderer {
                             mip_level_count: 1,
                             sample_count: 1,
                             dimension: wgpu::TextureDimension::D2,
-                            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                            format: wgpu::TextureFormat::R8Unorm,
                             usage: wgpu::TextureUsages::TEXTURE_BINDING
                                 | wgpu::TextureUsages::COPY_DST,
                             view_formats: &[],
                         });
 
-                        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                        let texture_uv = ctx.device.create_texture(&wgpu::TextureDescriptor {
+                            label: Some("video_frame_texture_uv"),
+                            size: wgpu::Extent3d {
+                                width: uv_w,
+                                height: uv_h,
+                                depth_or_array_layers: 1,
+                            },
+                            mip_level_count: 1,
+                            sample_count: 1,
+                            dimension: wgpu::TextureDimension::D2,
+                            format: wgpu::TextureFormat::Rg8Unorm,
+                            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                                | wgpu::TextureUsages::COPY_DST,
+                            view_formats: &[],
+                        });
+
+                        let view_y = texture_y.create_view(&wgpu::TextureViewDescriptor::default());
+                        let view_uv =
+                            texture_uv.create_view(&wgpu::TextureViewDescriptor::default());
 
                         let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
                             label: Some("video_bind_group"),
@@ -574,38 +730,68 @@ impl WallpaperRenderer for VideoRenderer {
                             entries: &[
                                 wgpu::BindGroupEntry {
                                     binding: 0,
-                                    resource: wgpu::BindingResource::TextureView(&view),
+                                    resource: wgpu::BindingResource::TextureView(&view_y),
                                 },
                                 wgpu::BindGroupEntry {
                                     binding: 1,
+                                    resource: wgpu::BindingResource::TextureView(&view_uv),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 2,
                                     resource: wgpu::BindingResource::Sampler(sampler),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 3,
+                                    resource: color_buffer.as_entire_binding(),
                                 },
                             ],
                         });
 
-                        self.texture = Some(texture);
-                        self.texture_view = Some(view);
+                        self.texture_y = Some(texture_y);
+                        self.texture_y_view = Some(view_y);
+                        self.texture_uv = Some(texture_uv);
+                        self.texture_uv_view = Some(view_uv);
                         self.bind_group = Some(bind_group);
                     }
 
-                    // Upload pixel data directly from GStreamer buffer into WGPU texture
-                    if let Some(texture) = &self.texture {
+                    // Upload pixel data directly from GStreamer buffer into WGPU textures
+                    if let (Some(tex_y), Some(tex_uv)) = (&self.texture_y, &self.texture_uv) {
                         ctx.queue.write_texture(
                             wgpu::TexelCopyTextureInfo {
-                                texture,
+                                texture: tex_y,
                                 mip_level: 0,
                                 origin: wgpu::Origin3d::ZERO,
                                 aspect: wgpu::TextureAspect::All,
                             },
-                            data,
+                            data_y,
                             wgpu::TexelCopyBufferLayout {
                                 offset: 0,
-                                bytes_per_row: Some(stride),
+                                bytes_per_row: Some(stride_y),
                                 rows_per_image: Some(h),
                             },
                             wgpu::Extent3d {
                                 width: w,
                                 height: h,
+                                depth_or_array_layers: 1,
+                            },
+                        );
+
+                        ctx.queue.write_texture(
+                            wgpu::TexelCopyTextureInfo {
+                                texture: tex_uv,
+                                mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            data_uv,
+                            wgpu::TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(stride_uv),
+                                rows_per_image: Some(uv_h),
+                            },
+                            wgpu::Extent3d {
+                                width: uv_w,
+                                height: uv_h,
                                 depth_or_array_layers: 1,
                             },
                         );
@@ -684,8 +870,7 @@ impl WallpaperRenderer for VideoRenderer {
                 self.volume = (n as f64).clamp(0.0, 100.0);
                 if let Some(pipeline) = &self.pipeline {
                     if old_vol <= 0.0 && self.volume > 0.0 {
-                        pipeline
-                            .set_property_from_str("flags", "video+audio+soft-volume+buffering");
+                        pipeline.set_property_from_str("flags", "video+audio+soft-volume");
                         if let Ok(asink) = gst::ElementFactory::make("pipewiresink")
                             .build()
                             .or_else(|_| gst::ElementFactory::make("autoaudiosink").build())
@@ -693,7 +878,7 @@ impl WallpaperRenderer for VideoRenderer {
                             pipeline.set_property("audio-sink", &asink);
                         }
                     } else if old_vol > 0.0 && self.volume <= 0.0 {
-                        pipeline.set_property_from_str("flags", "video+buffering");
+                        pipeline.set_property_from_str("flags", "video");
                         if let Ok(fakesink) = gst::ElementFactory::make("fakesink").build() {
                             pipeline.set_property("audio-sink", &fakesink);
                         }
@@ -780,6 +965,82 @@ mod tests {
 
         let validation = factory.validate(&manifest, Path::new("/tmp"));
         assert!(validation.is_err());
+    }
+
+    #[test]
+    fn test_color_ranges() {
+        let _ = gst_video::VideoColorRange::Range0_255;
+        let _ = gst_video::VideoColorRange::Range16_235;
+        let _ = gst_video::VideoColorMatrix::Bt709;
+        let _ = gst_video::VideoColorMatrix::Bt601;
+    }
+
+    #[test]
+    fn test_video_info_colorimetry() {
+        gst::init().unwrap();
+        let caps = gst::Caps::builder("video/x-raw")
+            .field("format", "NV12")
+            .field("width", 1920i32)
+            .field("height", 1080i32)
+            .field("framerate", gst::Fraction::new(30, 1))
+            .field("colorimetry", "bt709")
+            .build();
+        let info = gst_video::VideoInfo::from_caps(&caps).unwrap();
+        let colorimetry = info.colorimetry();
+        assert_eq!(colorimetry.range(), gst_video::VideoColorRange::Range16_235);
+        assert_eq!(colorimetry.matrix(), gst_video::VideoColorMatrix::Bt709);
+    }
+
+    #[test]
+    fn test_color_params_calculation() {
+        gst::init().unwrap();
+        let default_p = default_color_params(false);
+        assert!((default_p[0] - 16.0 / 255.0).abs() < 1e-6);
+        assert!((default_p[1] - 255.0 / 219.0).abs() < 1e-6);
+        assert!((default_p[2] - 128.0 / 255.0).abs() < 1e-6);
+        assert_eq!(default_p[7], 0.0);
+
+        let default_p_srgb = default_color_params(true);
+        assert_eq!(default_p_srgb[7], 1.0);
+
+        // Test BT.709 limited-range caps
+        let caps_709_lim = gst::Caps::builder("video/x-raw")
+            .field("format", "NV12")
+            .field("width", 1920i32)
+            .field("height", 1080i32)
+            .field("framerate", gst::Fraction::new(30, 1))
+            .field("colorimetry", "bt709")
+            .build();
+        let info_709_lim = gst_video::VideoInfo::from_caps(&caps_709_lim).unwrap();
+        let p_709_lim = color_params_from_video_info(&info_709_lim, false);
+        assert_eq!(p_709_lim, default_p);
+
+        let p_709_lim_srgb = color_params_from_video_info(&info_709_lim, true);
+        assert_eq!(p_709_lim_srgb[7], 1.0);
+
+        // Verify black level Y=16, U=128, V=128 maps to RGB (0, 0, 0)
+        let y_raw = 16.0 / 255.0;
+        let u_raw = 128.0 / 255.0;
+        let v_raw = 128.0 / 255.0;
+        let y = ((y_raw - p_709_lim[0]) * p_709_lim[1]).clamp(0.0, 1.0);
+        let u = u_raw - p_709_lim[2];
+        let v = v_raw - p_709_lim[2];
+        let r = (y + p_709_lim[3] * v).clamp(0.0, 1.0);
+        let g = (y - p_709_lim[4] * u - p_709_lim[5] * v).clamp(0.0, 1.0);
+        let b = (y + p_709_lim[6] * u).clamp(0.0, 1.0);
+        assert!(r.abs() < 1e-5);
+        assert!(g.abs() < 1e-5);
+        assert!(b.abs() < 1e-5);
+
+        // Verify white level Y=235, U=128, V=128 maps to RGB (1, 1, 1)
+        let y_white = 235.0 / 255.0;
+        let y_w = ((y_white - p_709_lim[0]) * p_709_lim[1]).clamp(0.0, 1.0);
+        let r_w = (y_w + p_709_lim[3] * v).clamp(0.0, 1.0);
+        let g_w = (y_w - p_709_lim[4] * u - p_709_lim[5] * v).clamp(0.0, 1.0);
+        let b_w = (y_w + p_709_lim[6] * u).clamp(0.0, 1.0);
+        assert!((r_w - 1.0).abs() < 1e-5);
+        assert!((g_w - 1.0).abs() < 1e-5);
+        assert!((b_w - 1.0).abs() < 1e-5);
     }
 
     #[test]
