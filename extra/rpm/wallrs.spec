@@ -71,6 +71,8 @@ cargo test --workspace --locked
 %{_metainfodir}/com.asdrome.wallrs.metainfo.xml
 
 %changelog
+* Fri Sep 25 2026 Antonio S. Dromundo <sebastiandromundo@outlook.com> - 1.2.0-1
+- Release 1.2.0: GStreamer migration, NV12 zero-copy hardware acceleration, plugin architecture
 * Sun Sep 06 2026 Antonio S. Dromundo <sebastiandromundo@outlook.com> - 0.1.0-1
 - Initial release of wallrs live wallpaper daemon
 

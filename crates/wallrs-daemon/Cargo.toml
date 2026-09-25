@@ -97,6 +97,11 @@ assets = [
         "755",
     ],
     [
+        "../../contrib/niri-auto-pause.sh",
+        "usr/share/wallrs/contrib/niri-auto-pause.sh",
+        "755",
+    ],
+    [
         "../../extra/metainfo/com.asdrome.wallrs.metainfo.xml",
         "usr/share/metainfo/com.asdrome.wallrs.metainfo.xml",
         "644",

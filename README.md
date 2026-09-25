@@ -12,18 +12,18 @@ A Wayland-native live wallpaper daemon (`wallrsd`) and CLI client (`wallctl`) wr
 
 ## Features
 
-- **Wayland native**: Renders to the `background` layer via `zwlr_layer_shell_v1` without X11 or Xwayland dependencies.
+- **Wayland native & HiDPI aware**: Renders to the `background` layer via `zwlr_layer_shell_v1` without X11 or Xwayland dependencies. Dynamically tracks compositor scaling (`wl_surface::preferred_buffer_scale`), reconfigures swapchains on the fly, and normalizes pointer coordinates across fractional and integer scaling.
 - **Hardware-accelerated rendering**: Vulkan swapchains managed via `wgpu`, synchronized with display refresh rate via `wl_surface.frame()`.
-- **Multiple content backends**:
+- **Multiple content backends (Plugin Architecture)**:
   - **Static and parallax images**: Multi-layer compositing with cursor-driven parallax, continuous linear panning, periodic oscillation, dynamic diurnal day/night cycles, and automatic idle settling (0.0% CPU when mouse is still).
-  - **Procedural shaders**: Native WGSL shaders and translated Shadertoy GLSL shaders with built-in uniforms (`u_time`, `u_resolution`, `u_mouse`, `u_audio_spectrum`).
-  - **Video playback**: Hardware and software decoding via GStreamer (`appsink`) with volume, mute, and speed controls.
-  - **Background audio**: Ambient audio tracks (`[audio]`) attached to image or shader wallpapers via GStreamer (`pipewiresink`). Audio is muted by default to prevent unwanted desktop noise.
+  - **Procedural shaders**: Native WGSL shaders and translated Shadertoy GLSL shaders with built-in uniforms (`u_time`, `u_resolution`, `u_mouse`, `u_audio_spectrum`), custom named uniform parameters (`[shader.uniforms]`), and configurable framerate ceilings (`[shader.fps]`).
+  - **Video playback**: High-performance NV12 GPU hardware and software decoding via GStreamer with dynamic colorimetry negotiation (ITU-R BT.709/BT.601, Studio vs Full Range), sRGB double-gamma compensation, and intelligent hardware postprocessor injection (`vapostproc` on VA-API with seamless fallback for NVIDIA and software decoders).
+  - **Background audio**: Ambient audio tracks (`[audio]`) attached to image or shader wallpapers via GStreamer (`pipewiresink`). Audio defaults to muted to prevent unwanted desktop noise, with atomic `--unmute` option on wallpaper apply.
 - **Audio reactivity**: Real-time audio capture via PipeWire (`pw_stream`) with a 64-band logarithmic FFT analyzer (`RustFFT`). Captures are initiated on-demand and released when inactive.
-- **Resource management**: Automatic pause and resume on fullscreen or maximized windows (`zwlr_foreign_toplevel_management_v1`). Configurable FPS ceiling via `--fps` or per-wallpaper `[image.fps]`, with intelligent on-demand frame wakeups and low-frequency diurnal updates.
+- **Resource management**: Automatic pause and resume on fullscreen or maximized windows (`zwlr_foreign_toplevel_management_v1`). Configurable FPS ceiling via `--fps` or per-wallpaper `[image.fps]` / `[shader.fps]`, with intelligent on-demand frame wakeups and low-frequency diurnal updates.
 - **Fault isolation**: Each display output runs an isolated render loop protected by `catch_unwind`, preventing an error on one monitor from affecting others.
 - **Direct GPU screenshots**: Framebuffer capture straight to PNG, JPEG, or WebP via `wallctl screenshot`.
-- **Unix socket IPC**: JSON-based control protocol over Unix domain sockets via `wallctl`.
+- **Unix socket IPC**: JSON-based control protocol over Unix domain sockets via `wallctl`, featuring atomic set-and-unmute, dedicated mute/unmute commands, and unified color parsing.
 
 ---
 
@@ -326,10 +326,11 @@ loop = true
 
 ## Window Tracking & Community Helpers (`contrib/`)
 
-Because KDE Plasma 6 does not expose `zwlr_foreign_toplevel_manager_v1` and tiling window managers (Hyprland, Sway) rarely leave windows in maximized/fullscreen states, optional helper scripts are provided in [`contrib/`](contrib/):
+Because KDE Plasma 6 does not expose `zwlr_foreign_toplevel_manager_v1` and tiling window managers (Hyprland, Niri, Sway) benefit from active workspace tracking, optional helper scripts are provided in [`contrib/`](contrib/):
 
 - **[`contrib/wallrs-theme-sync.sh`](contrib/wallrs-theme-sync.sh)**: Desktop-agnostic theming dispatcher managed by `wallrs-theme-sync.path`. Synchronizes desktop accent color and palette from active wallpapers on KDE Plasma (via `kde-accent-color.sh`) or Hyprland/wlroots (via Matugen).
-- **[`contrib/wallrs-auto-pause.sh`](contrib/wallrs-auto-pause.sh)**: Desktop-agnostic auto-pause dispatcher managed by `wallrs-auto-pause.service`. Automatically runs the appropriate driver for KDE Plasma or Hyprland, and idles gracefully on Sway/wlroots.
+- **[`contrib/wallrs-auto-pause.sh`](contrib/wallrs-auto-pause.sh)**: Desktop-agnostic auto-pause dispatcher managed by `wallrs-auto-pause.service`. Automatically runs the appropriate driver for KDE Plasma, Hyprland, or Niri, and idles gracefully on Sway/wlroots.
+- **[`contrib/niri-auto-pause.sh`](contrib/niri-auto-pause.sh)**: Watches Niri's IPC event stream and pauses rendering when windows occupy the active workspace, resuming when empty, transparent, or in overview mode.
 - **[`contrib/hyprland-auto-pause.sh`](contrib/hyprland-auto-pause.sh)**: Watches Hyprland's IPC socket2 event stream and pauses rendering when windows occupy the active workspace.
 - **[`contrib/kde-auto-pause.sh`](contrib/kde-auto-pause.sh)**: Monitors KWin's D-Bus interface to pause rendering when windows cover the screen (maximized/fullscreen) and resume when the desktop is exposed (`Meta+D` or floating).
 

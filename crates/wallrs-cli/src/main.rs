@@ -503,7 +503,7 @@ fn run() -> Result<(), String> {
         Subcommands::Screenshot(args) => (
             Command::Screenshot {
                 output: args.output,
-                path: args.path,
+                path: resolve_screenshot_path(args.path),
             },
             false,
         ),
@@ -529,6 +529,26 @@ fn run() -> Result<(), String> {
             Ok(())
         }
         Response::Error(err) => Err(format!("Daemon error: {err}")),
+    }
+}
+
+/// Resolves the destination path for a screenshot command.
+///
+/// Because `wallrsd` runs as a system daemon (often with working directory `$HOME` or `/`),
+/// relative paths passed to `wallctl` must be resolved relative to the user's current
+/// terminal working directory rather than the daemon's working directory.
+pub(crate) fn resolve_screenshot_path(path: PathBuf) -> PathBuf {
+    if let Ok(stripped) = path.strip_prefix("~")
+        && let Some(home) = std::env::var_os("HOME").map(PathBuf::from)
+    {
+        return home.join(stripped);
+    }
+    if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
     }
 }
 
@@ -805,5 +825,21 @@ mod tests {
         } else {
             panic!("Expected color");
         }
+    }
+
+    #[test]
+    fn test_resolve_screenshot_path() {
+        let abs = PathBuf::from("/tmp/wallrs-screenshot.png");
+        assert_eq!(resolve_screenshot_path(abs.clone()), abs);
+
+        let rel = PathBuf::from("my_screen.png");
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        assert_eq!(resolve_screenshot_path(rel), cwd.join("my_screen.png"));
+
+        let nested = PathBuf::from("screenshots/output.webp");
+        assert_eq!(
+            resolve_screenshot_path(nested),
+            cwd.join("screenshots/output.webp")
+        );
     }
 }

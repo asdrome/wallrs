@@ -78,12 +78,29 @@ Dispatches theming updates automatically based on the running desktop environmen
 
 ---
 
-### 6. `wallrs-auto-pause.sh` (Desktop-Agnostic Auto-Pause Dispatcher)
-Dispatches automatic wallpaper pause/resume based on the running desktop environment (`$XDG_CURRENT_DESKTOP`).
+### 6. `niri-auto-pause.sh`
+Monitors active workspaces and overview mode over Niri's IPC event stream.
+
+- **Default Behavior**: Pauses rendering when opaque windows occupy the active workspace; resumes when the workspace is empty, contains **only transparent windows** (e.g. Kitty, Alacritty, Foot), or when **Niri overview mode** is opened.
+- **Environment Variables**:
+  - `TRANSPARENT_CLASSES`: Regex of classes/app_ids to treat as transparent (default: `kitty|Alacritty|foot|wezterm|ghostty`).
+  - `IGNORE_FLOATING`: Set `1` (default) to ignore small floating dialogs/calculators, `0` to count them.
+  - `WALLCTL_BIN`: Optional path to custom `wallctl` binary.
+- **Niri autostart**:
+  ```kdl
+  // in ~/.config/niri/config.kdl
+  spawn-at-startup "/usr/share/wallrs/contrib/niri-auto-pause.sh"
+  ```
+
+---
+
+### 7. `wallrs-auto-pause.sh` (Desktop-Agnostic Auto-Pause Dispatcher)
+Dispatches automatic wallpaper pause/resume based on the running desktop environment (`$XDG_CURRENT_DESKTOP`, `$NIRI_SOCKET`, `$HYPRLAND_INSTANCE_SIGNATURE`).
 
 - **Workflow**:
   - On KDE Plasma: executes `kde-auto-pause.sh` (monitoring KWin D-Bus window states).
   - On Hyprland: executes `hyprland-auto-pause.sh` (monitoring socket2 IPC tiling state).
+  - On Niri: executes `niri-auto-pause.sh` (monitoring Niri IPC event stream and overview state).
   - On Sway / wlroots: informs that fullscreen pause is handled natively by `wallrsd` via `zwlr_foreign_toplevel_manager_v1`, idling with zero resource consumption.
 - **Systemd Integration (Recommended)**:
   Enable the included systemd service so window tracking and pausing runs automatically with your desktop session:

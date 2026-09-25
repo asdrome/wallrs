@@ -5,11 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.2.0] - 2026-09-25
 
 ### Added
-- **GStreamer Video Engine (`wallrs-content-video`)**: Migrated the video wallpaper engine from `libmpv` to GStreamer using `playbin3` and `appsink`. Hardware-accelerated decoders (`vaapi`, `nvdec`, `v4l2`) negotiate RGBA frames directly into zero-copy mapped buffer memory, completely eliminating intermediate CPU buffer allocations and copies (`cpu_buffer: Vec<u8>`).
-- **GStreamer Ambient Audio Engine (`wallrs-audio`)**: Replaced `libmpv` in `BackgroundAudioPlayer` with a dedicated, headless GStreamer audio pipeline utilizing `pipewiresink` (with automatic fallback to `autoaudiosink`), ensuring native, low-latency PipeWire stream integration without conflicting with FFT spectrum capture.
+- **GStreamer Video Engine (`wallrs-content-video`)**: Migrated the video wallpaper engine from `libmpv` to GStreamer using `playbin` and `appsink`. Direct zero-copy GPU texture uploads (`t_y` and `t_uv`) in NV12 format with shader color conversion, completely eliminating intermediate CPU RGBA conversions.
+- **Dynamic Colorimetry & Double-Gamma Compensation (`wallrs-content-video`)**: Automatic detection of video color range (Full 0-255 vs Studio 16-235) and color matrix (ITU-R BT.709 vs BT.601) via GStreamer `VideoInfo`. Injects $R'G'B' \to \text{linear}$ conversion when rendering to sRGB surfaces, eliminating the washed-out milky look and preserving original video contrast 1:1 with fail-safe fallback.
+- **Intelligent Hardware Postprocessor Injection (`vapostproc`)**: Dynamic detection of VA-API decoders via `element-setup` and hardware context verification (`/dev/dri/renderD128`). NVIDIA (`nvdec`) and software (`avdec`) decoders bypass `vapostproc` cleanly, preventing pipeline negotiation errors and PCIe bandwidth waste.
+- **GStreamer Ambient Audio Engine (`wallrs-audio`)**: Replaced `libmpv` in `BackgroundAudioPlayer` with a dedicated, headless GStreamer audio pipeline utilizing `pipewiresink` (with fallback to `autoaudiosink`), native PipeWire integration, and lean thread model.
 - **Complete Retirement of `libmpv`**: Fully removed `libmpv2` and `libmpv2-sys` from the workspace. Updated Arch Linux PKGBUILD, Fedora RPM spec, Debian package definitions, and documentation to reflect modern GStreamer dependencies (`gstreamer1`, `gst-plugins-base`, `gst-plugins-good`).
 - **Plugin Architecture & Dynamic Factory Registry (`wallrs-render` & `wallrs-core`)**: Fully decoupled `wallrs-core` from direct dependencies on concrete content renderers (`wallrs-content-image`, `wallrs-content-shader`, `wallrs-content-video`). Introduced `RendererFactory`, `RendererRegistry`, and `RendererCapabilities` in `wallrs-render`, enabling dynamic wallpaper renderer registration and inversion of control.
 - **Content Renderer Factories**: Implemented `ImageRendererFactory`, `ShaderRendererFactory`, and `VideoRendererFactory` in their respective crates, encapsulating asset validation and instantiation without early GPU resource allocation.
@@ -19,15 +21,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Decoupled CLI Dependency Tree**: Removed unused content render dependencies from `wallrs-cli` (`wallctl`).
 - **Dynamic HiDPI Scaling on Wayland (`wallrs-core`)**: Implemented `CompositorHandler::scale_factor_changed` and `OutputHandler` scale factor tracking. Surfaces dynamically call `wl_surface::set_buffer_scale`, recompute physical framebuffer dimensions ($\text{Physical} = \text{Logical} \times \text{Scale}$), and reconfigure WGPU swapchains and renderer viewports on scale factor changes without requiring daemon restarts.
 - **HiDPI-Aware Pointer Coordinate Normalization**: Separated `logical_width` and `logical_height` from physical framebuffer dimensions on `OutputSurface`, ensuring cursor coordinates from Wayland pointer motion events are normalized accurately across $[-1.0, 1.0]$ on high-density displays (e.g. 4K at 2x) without restricting cursor parallax to the top-left quadrant.
-
-## [1.2.0] - 2026-09-16
-
-### Added
 - **Dynamic Named Shader Uniforms**: Authors can now define arbitrary property names in `[shader.uniforms]` (e.g. `speed = 1.0`, `glow = 0.5`) and specify optional slot ordering via `[shader] uniform_mapping`. `wallrs` auto-injects helper functions directly into WGSL (e.g. `fn speed() -> f32`), enabling seamless shader access. Properties can be tuned at runtime via `wallctl set-property <name> <val>`.
 - **Shader Framerate Ceiling (`fps` / `target_fps`)**: Added configurable `fps = <u32>` ceiling to `[shader]` in `wallpaper.toml` (defaults to 60 FPS ceiling, `0` for uncapped), preventing GPU and thermal waste on 144Hz–240Hz displays. Can also be adjusted on the fly with `wallctl set-property fps <num>`.
 - **Unified Color Parser (`wallrs-proto`)**: Centralized `wallrs_proto::parse_color` across `wallrs-cli` and `wallrs-daemon`, with support for `#RGB`, `#RGBA`, `#RRGGBB`, `#RRGGBBAA`, bare hex values, and comma-separated floats `r,g,b[,a]`.
+- **Niri Auto-Pause Driver (`contrib/niri-auto-pause.sh`)**: Added dedicated auto-pause integration for Niri compositors via Niri's IPC event stream (`niri msg --json event-stream`). Tracks focused workspaces, pauses rendering when opaque windows are active, and automatically resumes when workspaces are empty, occupied only by transparent windows, or when Niri overview mode is toggled open.
+- **Niri Compositor Detection in Dispatcher (`contrib/wallrs-auto-pause.sh`)**: Added native detection for Niri sessions via `$NIRI_SOCKET` and `$XDG_CURRENT_DESKTOP`. Seamlessly launches `niri-auto-pause.sh` when available or idles gracefully with native `zwlr_foreign_toplevel_manager_v1` support, preventing premature systemd service termination.
 - **Dedicated IPC `Mute` / `Unmute` Commands**: Added explicit `Command::Mute` and `Command::Unmute` socket messages to control audio output deterministically without manual boolean toggles.
 - **Atomic `--unmute` on Set Wallpaper**: Integrated `unmute: bool` directly into `Command::SetWallpaper`. Applying a wallpaper with `wallctl set <path> --unmute` now executes atomically in a single IPC transaction without a second socket call.
+
+### Fixed
+- **Screenshot Path Resolution (`wallctl screenshot`)**: Resolved relative destination paths against the CLI caller's `$PWD` and expanded `~` before sending IPC messages to `wallrsd`, fixing an issue where screenshots were saved relative to the daemon's working directory (`$HOME` or `/`) instead of the current terminal directory.
+- **GitHub Actions CI/Release Node 24 Migration**: Upgraded runner actions across CI and Release workflows (`actions/checkout@v7`, `actions/upload-artifact@v7`, `actions/download-artifact@v7`, `actions/cache@v5`, `softprops/action-gh-release@v3`), fully resolving Node.js 20 deprecation warnings on GitHub Actions runners.
 
 ### Changed
 - **Extended Shader Uniform Buffer (224 bytes)**: Appended `custom_extra: array<vec4<f32>, 2>` (slots 3 to 10) to the standard uniform layout at offset 192, ensuring 100% backward compatibility with 192-byte shaders while expanding custom uniform capacity to 11 float parameters.
