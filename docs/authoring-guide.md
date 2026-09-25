@@ -245,7 +245,7 @@ glow = 0.5
 
 ### 3. Video Wallpapers (`type = "video"`)
 
-Hardware-accelerated video playback in a loop via `libmpv`.
+Hardware-accelerated video playback in a loop via GStreamer (`appsink`).
 
 ```toml
 [wallpaper]

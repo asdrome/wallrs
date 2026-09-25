@@ -6,7 +6,7 @@
 [![PipeWire](https://img.shields.io/badge/audio-pipewire-brightgreen.svg)](https://pipewire.org/)
 [![License](https://img.shields.io/badge/license-MIT%20%7C%20Apache--2.0-lightgrey.svg)](LICENSE-MIT)
 
-A Wayland-native live wallpaper daemon (`wallrsd`) and CLI client (`wallctl`) written in Rust using `wgpu` (Vulkan), `smithay-client-toolkit` (`wlr-layer-shell`), PipeWire, and `libmpv`.
+A Wayland-native live wallpaper daemon (`wallrsd`) and CLI client (`wallctl`) written in Rust using `wgpu` (Vulkan), `smithay-client-toolkit` (`wlr-layer-shell`), PipeWire, and GStreamer.
 
 ---
 
@@ -17,8 +17,8 @@ A Wayland-native live wallpaper daemon (`wallrsd`) and CLI client (`wallctl`) wr
 - **Multiple content backends**:
   - **Static and parallax images**: Multi-layer compositing with cursor-driven parallax, continuous linear panning, periodic oscillation, dynamic diurnal day/night cycles, and automatic idle settling (0.0% CPU when mouse is still).
   - **Procedural shaders**: Native WGSL shaders and translated Shadertoy GLSL shaders with built-in uniforms (`u_time`, `u_resolution`, `u_mouse`, `u_audio_spectrum`).
-  - **Video playback**: Hardware and software decoding via `libmpv` with volume, mute, and speed controls.
-  - **Background audio**: Ambient audio tracks (`[audio]`) attached to image or shader wallpapers. Audio is muted by default to prevent unwanted desktop noise.
+  - **Video playback**: Hardware and software decoding via GStreamer (`appsink`) with volume, mute, and speed controls.
+  - **Background audio**: Ambient audio tracks (`[audio]`) attached to image or shader wallpapers via GStreamer (`pipewiresink`). Audio is muted by default to prevent unwanted desktop noise.
 - **Audio reactivity**: Real-time audio capture via PipeWire (`pw_stream`) with a 64-band logarithmic FFT analyzer (`RustFFT`). Captures are initiated on-demand and released when inactive.
 - **Resource management**: Automatic pause and resume on fullscreen or maximized windows (`zwlr_foreign_toplevel_management_v1`). Configurable FPS ceiling via `--fps` or per-wallpaper `[image.fps]`, with intelligent on-demand frame wakeups and low-frequency diurnal updates.
 - **Fault isolation**: Each display output runs an isolated render loop protected by `catch_unwind`, preventing an error on one monitor from affecting others.
@@ -45,7 +45,7 @@ A Wayland-native live wallpaper daemon (`wallrsd`) and CLI client (`wallctl`) wr
 ### Runtime Dependencies
 - `vulkan-loader`
 - `pipewire`
-- `mpv` (`libmpv.so.2` or `libmpv.so.1`)
+- `gstreamer` / `gst-plugins-base` / `gst-plugins-good`
 - `wayland-client`
 
 ### Build Dependencies
@@ -53,24 +53,24 @@ A Wayland-native live wallpaper daemon (`wallrsd`) and CLI client (`wallctl`) wr
 - `pkg-config`
 - `libvulkan-dev` / `vulkan-loader-devel`
 - `libpipewire-0.3-dev` / `pipewire-devel`
-- `libmpv-dev` / `mpv-devel`
+- `gstreamer1-devel` & `gstreamer1-plugins-base-devel` (or `libgstreamer1.0-dev` & `libgstreamer-plugins-base1.0-dev`)
 - `libwayland-dev` / `wayland-devel`
 
 #### Distribution Packages
 
 **Arch Linux / Manjaro**:
 ```bash
-sudo pacman -S --needed rust cargo vulkan-icd-loader pipewire mpv wayland pkgconf
+sudo pacman -S --needed rust cargo vulkan-icd-loader pipewire gst-plugins-base gst-plugins-good gstreamer wayland pkgconf
 ```
 
 **Fedora / RHEL**:
 ```bash
-sudo dnf install rust cargo vulkan-loader-devel pipewire-devel mpv-devel wayland-devel pkgconf-pkg-config
+sudo dnf install rust cargo vulkan-loader-devel pipewire-devel gstreamer1-devel gstreamer1-plugins-base-devel wayland-devel pkgconf-pkg-config
 ```
 
 **Ubuntu / Debian (24.04+)**:
 ```bash
-sudo apt install cargo rustc libvulkan-dev libpipewire-0.3-dev libmpv-dev libwayland-dev pkg-config
+sudo apt install cargo rustc libvulkan-dev libpipewire-0.3-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-good libwayland-dev pkg-config
 ```
 
 ---
@@ -290,7 +290,7 @@ entry = "plasma.glsl"
 ```
 
 ### 3. Video Wallpaper
-Looping video playback with volume and speed controls via `libmpv`.
+Looping video playback with volume and speed controls via GStreamer (`appsink`).
 
 ```toml
 [wallpaper]
@@ -345,7 +345,7 @@ wallrs/
 │   ├── wallrs-audio/           # PipeWire client, on-demand stream lifecycle, RustFFT spectrum analysis
 │   ├── wallrs-content-image/   # Multi-layer parallax and panning image engine
 │   ├── wallrs-content-shader/  # WGSL and Shadertoy GLSL compiler and renderer
-│   ├── wallrs-content-video/   # libmpv integration, video decode and render loop
+│   ├── wallrs-content-video/   # GStreamer integration, video decode and render loop
 │   ├── wallrs-core/            # SCTK layer-shell event loop, toplevel detection, engine state
 │   ├── wallrs-daemon/          # wallrsd daemon executable
 │   └── wallrs-cli/             # wallctl CLI tool

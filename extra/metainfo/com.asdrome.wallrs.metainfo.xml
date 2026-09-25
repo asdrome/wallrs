@@ -11,7 +11,7 @@
   <description>
     <p>
       High-performance Wayland-native live wallpaper daemon and CLI controller
-      written in pure Rust with wgpu/Vulkan, PipeWire, and libmpv2.
+      written in pure Rust with wgpu/Vulkan, PipeWire, and GStreamer.
     </p>
   </description>
   <url type="homepage">https://github.com/asdrome/wallrs</url>

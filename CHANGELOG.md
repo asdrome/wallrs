@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **GStreamer Video Engine (`wallrs-content-video`)**: Migrated the video wallpaper engine from `libmpv` to GStreamer using `playbin3` and `appsink`. Hardware-accelerated decoders (`vaapi`, `nvdec`, `v4l2`) negotiate RGBA frames directly into zero-copy mapped buffer memory, completely eliminating intermediate CPU buffer allocations and copies (`cpu_buffer: Vec<u8>`).
+- **GStreamer Ambient Audio Engine (`wallrs-audio`)**: Replaced `libmpv` in `BackgroundAudioPlayer` with a dedicated, headless GStreamer audio pipeline utilizing `pipewiresink` (with automatic fallback to `autoaudiosink`), ensuring native, low-latency PipeWire stream integration without conflicting with FFT spectrum capture.
+- **Complete Retirement of `libmpv`**: Fully removed `libmpv2` and `libmpv2-sys` from the workspace. Updated Arch Linux PKGBUILD, Fedora RPM spec, Debian package definitions, and documentation to reflect modern GStreamer dependencies (`gstreamer1`, `gst-plugins-base`, `gst-plugins-good`).
 - **Plugin Architecture & Dynamic Factory Registry (`wallrs-render` & `wallrs-core`)**: Fully decoupled `wallrs-core` from direct dependencies on concrete content renderers (`wallrs-content-image`, `wallrs-content-shader`, `wallrs-content-video`). Introduced `RendererFactory`, `RendererRegistry`, and `RendererCapabilities` in `wallrs-render`, enabling dynamic wallpaper renderer registration and inversion of control.
 - **Content Renderer Factories**: Implemented `ImageRendererFactory`, `ShaderRendererFactory`, and `VideoRendererFactory` in their respective crates, encapsulating asset validation and instantiation without early GPU resource allocation.
 - **Dynamic Dependency Injection in Daemon (`wallrsd`)**: Configured `wallrs-daemon` to register all content factories into `RendererRegistry` at startup and inject the registry into `EngineConfig`.

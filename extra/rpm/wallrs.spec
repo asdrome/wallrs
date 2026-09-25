@@ -14,21 +14,24 @@ BuildRequires:  clang
 BuildRequires:  clang-devel
 BuildRequires:  pkgconf
 BuildRequires:  pipewire-devel
-BuildRequires:  mpv-devel
+BuildRequires:  gstreamer1-devel
+BuildRequires:  gstreamer1-plugins-base-devel
 BuildRequires:  wayland-devel
 BuildRequires:  vulkan-loader-devel
 BuildRequires:  systemd-rpm-macros
 
 # Runtime dependencies (required for end-user execution)
-# Note: Dynamic shared library dependencies (libpipewire, libmpv) are
+# Note: Dynamic shared library dependencies (libpipewire, libgstreamer) are
 # automatically detected and added by RPM's find-requires script.
 Requires:       vulkan-loader
 Requires:       pipewire-libs
-Requires:       mpv-libs
+Requires:       gstreamer1
+Requires:       gstreamer1-plugins-base
+Requires:       gstreamer1-plugins-good
 
 %description
 A high-performance, Wayland-native live wallpaper daemon (wallrsd) and CLI
-controller (wallctl) written in pure Rust with wgpu/Vulkan, PipeWire, and libmpv2.
+controller (wallctl) written in pure Rust with wgpu/Vulkan, PipeWire, and GStreamer.
 Supports multi-layer parallax images, procedural WGSL/Shadertoy shaders,
 hardware-accelerated videos, PipeWire audio reactivity, and automatic fullscreen/maximize pause.
 

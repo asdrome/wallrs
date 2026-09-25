@@ -31,8 +31,9 @@ image = { version = "0.25", default-features = false, features = [
     "jpeg",
     "webp",
 ] }
-libmpv2 = "6.0"
-libmpv2-sys = "4.0"
+gstreamer = "0.25"
+gstreamer-app = "0.25"
+gstreamer-video = "0.25"
 libc = "0.2"
 naga = { version = "30", features = ["glsl-in", "wgsl-out"] }
 pollster = "0.3"
