@@ -38,6 +38,9 @@ pub struct OutputSurface {
     pub renderer: Option<Box<dyn WallpaperRenderer>>,
     pub width: u32,
     pub height: u32,
+    pub logical_width: u32,
+    pub logical_height: u32,
+    pub scale_factor: i32,
     pub configured: bool,
     pub manual_paused: bool,
     pub fullscreen_paused: bool,
@@ -47,9 +50,7 @@ pub struct OutputSurface {
     pub last_frame_time: Option<Instant>,
     pub last_rendered_frame_time: Option<Instant>,
     pub cursor_position: Option<(f32, f32)>,
-    pub audio_handle: Option<wallrs_audio::SpectrumHandle>,
-    pub audio_track: Option<wallrs_audio::BackgroundAudioPlayer>,
-    pub audio_muted: bool,
+    pub audio: crate::audio::AudioController,
     pub current_wallpaper: Option<std::path::PathBuf>,
 }
 
@@ -77,6 +78,9 @@ impl OutputSurface {
             renderer: None,
             width: 0,
             height: 0,
+            logical_width: 0,
+            logical_height: 0,
+            scale_factor: 1,
             configured: false,
             manual_paused: false,
             fullscreen_paused: false,
@@ -86,9 +90,7 @@ impl OutputSurface {
             last_frame_time: None,
             last_rendered_frame_time: None,
             cursor_position: None,
-            audio_handle: None,
-            audio_track: None,
-            audio_muted: true,
+            audio: crate::audio::AudioController::new(true),
             current_wallpaper: None,
         }
     }
@@ -109,14 +111,23 @@ impl OutputSurface {
         renderer_factory: &dyn Fn() -> Box<dyn WallpaperRenderer>,
         compositor: &wl_compositor::WlCompositor,
     ) -> Result<(), OutputError> {
-        let width = if new_size.0 > 0 { new_size.0 } else { 1920 };
-        let height = if new_size.1 > 0 { new_size.1 } else { 1080 };
+        let logical_width = if new_size.0 > 0 { new_size.0 } else { 1920 };
+        let logical_height = if new_size.1 > 0 { new_size.1 } else { 1080 };
+        let scale = self.scale_factor.max(1);
+        let physical_width = logical_width.saturating_mul(scale as u32);
+        let physical_height = logical_height.saturating_mul(scale as u32);
+
+        // Notify compositor of our buffer scale factor
+        self.layer_surface.wl_surface().set_buffer_scale(scale);
 
         if !self.configured {
             tracing::info!(
                 output = ?self.name,
-                width = width,
-                height = height,
+                logical_width = logical_width,
+                logical_height = logical_height,
+                physical_width = physical_width,
+                physical_height = physical_height,
+                scale = scale,
                 "First configure received for output; creating wgpu surface"
             );
 
@@ -142,7 +153,7 @@ impl OutputSurface {
             };
 
             let mut config = wgpu_surface
-                .get_default_config(gpu.adapter, width, height)
+                .get_default_config(gpu.adapter, physical_width, physical_height)
                 .ok_or_else(|| {
                     OutputError::SurfaceCreation("No supported surface configuration".into())
                 })?;
@@ -154,40 +165,53 @@ impl OutputSurface {
             renderer
                 .init(gpu.device, gpu.queue, config.format)
                 .map_err(|e| OutputError::RendererInit(e.to_string()))?;
-            renderer.resize(width, height);
+            renderer.resize(physical_width, physical_height);
 
             self.wgpu_surface = Some(wgpu_surface);
             self.surface_config = Some(config);
             self.renderer = Some(renderer);
-            self.width = width;
-            self.height = height;
+            self.logical_width = logical_width;
+            self.logical_height = logical_height;
+            self.width = physical_width;
+            self.height = physical_height;
             self.configured = true;
 
             self.update_input_region(compositor, qh);
 
             // Immediately render the first frame to attach buffer, map surface in compositor, and kick off frame loop
             self.render_frame(gpu.device, gpu.queue, qh);
-        } else if self.width != width || self.height != height {
+        } else if self.width != physical_width
+            || self.height != physical_height
+            || self.logical_width != logical_width
+            || self.logical_height != logical_height
+        {
             tracing::info!(
                 output = ?self.name,
-                old_width = self.width,
-                old_height = self.height,
-                new_width = width,
-                new_height = height,
+                old_logical_width = self.logical_width,
+                old_logical_height = self.logical_height,
+                new_logical_width = logical_width,
+                new_logical_height = logical_height,
+                old_physical_width = self.width,
+                old_physical_height = self.height,
+                new_physical_width = physical_width,
+                new_physical_height = physical_height,
+                scale = scale,
                 "Output resized; reconfiguring wgpu surface"
             );
 
-            self.width = width;
-            self.height = height;
+            self.logical_width = logical_width;
+            self.logical_height = logical_height;
+            self.width = physical_width;
+            self.height = physical_height;
 
             if let (Some(surface), Some(config)) = (&self.wgpu_surface, &mut self.surface_config) {
-                config.width = width;
-                config.height = height;
+                config.width = physical_width;
+                config.height = physical_height;
                 surface.configure(gpu.device, config);
             }
 
             if let Some(renderer) = &mut self.renderer {
-                renderer.resize(width, height);
+                renderer.resize(physical_width, physical_height);
             }
         }
 
@@ -251,7 +275,7 @@ impl OutputSurface {
             .map_or(Duration::from_millis(16), |last| now.duration_since(last));
         self.last_frame_time = Some(now);
 
-        let spectrum_arc = self.audio_handle.as_ref().map(|h| h.latest());
+        let spectrum_arc = self.audio.spectrum();
         let spectrum = spectrum_arc.as_deref().map(|v| v.as_slice());
 
         let ctx = FrameContext {
@@ -447,28 +471,11 @@ impl OutputSurface {
         value: wallrs_proto::PropertyValue,
         qh: &QueueHandle<EngineState>,
     ) -> Result<(), OutputError> {
-        if key == "mute"
-            && let wallrs_proto::PropertyValue::Bool(b) = value
+        if self
+            .audio
+            .set_property(key, &value, self.renderer.as_deref_mut())
         {
-            self.set_muted(b);
             return Ok(());
-        }
-
-        if key == "volume" {
-            let mut handled = false;
-            if let Some(renderer) = &mut self.renderer
-                && renderer.set_property(key, value.clone()).is_ok()
-            {
-                handled = true;
-            }
-            if let Some(player) = &mut self.audio_track
-                && player.set_property(key, value.clone()).is_ok()
-            {
-                handled = true;
-            }
-            if handled {
-                return Ok(());
-            }
         }
 
         if let Some(renderer) = &mut self.renderer {
@@ -476,29 +483,33 @@ impl OutputSurface {
                 .set_property(key, value.clone())
                 .map_err(|e| OutputError::Renderer(e.to_string()))?;
         }
-        if let Some(player) = &mut self.audio_track {
-            let _ = player.set_property(key, value);
-        }
         self.request_frame(qh);
         Ok(())
     }
 
+    /// Returns whether audio is currently muted on this output.
+    pub fn is_muted(&self) -> bool {
+        self.audio.is_muted()
+    }
+
+    /// Convenience alias for `is_muted`.
+    pub fn audio_muted(&self) -> bool {
+        self.audio.is_muted()
+    }
+
     /// Sets the muted state for this output's renderer and background audio track.
     pub fn set_muted(&mut self, muted: bool) {
-        self.audio_muted = muted;
-        if let Some(renderer) = &mut self.renderer {
-            let _ = renderer.set_property("mute", wallrs_proto::PropertyValue::Bool(muted));
-        }
-        if let Some(player) = &mut self.audio_track {
-            let _ = player.set_property("mute", wallrs_proto::PropertyValue::Bool(muted));
-        }
+        self.audio.set_muted(muted, self.renderer.as_deref_mut());
     }
 
     /// Toggles the muted state of this output and returns the new state.
     pub fn toggle_mute(&mut self) -> bool {
-        let new_state = !self.audio_muted;
-        self.set_muted(new_state);
-        new_state
+        self.audio.toggle_mute(self.renderer.as_deref_mut())
+    }
+
+    /// Sets playback volume on this output's renderer and background audio track.
+    pub fn set_volume(&mut self, volume: f64) {
+        self.audio.set_volume(volume, self.renderer.as_deref_mut());
     }
 
     /// Sets the manual paused state of this output (e.g., from `wallctl pause`).
@@ -508,13 +519,8 @@ impl OutputSurface {
         self.manual_paused = paused;
         let is_paused = self.is_paused();
         if was_paused != is_paused {
-            if let Some(renderer) = &mut self.renderer {
-                let _ =
-                    renderer.set_property("pause", wallrs_proto::PropertyValue::Bool(is_paused));
-            }
-            if let Some(player) = &mut self.audio_track {
-                player.set_paused(is_paused);
-            }
+            self.audio
+                .set_paused(is_paused, self.renderer.as_deref_mut());
         }
         if was_paused && !is_paused {
             self.request_frame(qh);
@@ -527,13 +533,8 @@ impl OutputSurface {
         self.fullscreen_paused = paused;
         let is_paused = self.is_paused();
         if was_paused != is_paused {
-            if let Some(renderer) = &mut self.renderer {
-                let _ =
-                    renderer.set_property("pause", wallrs_proto::PropertyValue::Bool(is_paused));
-            }
-            if let Some(player) = &mut self.audio_track {
-                player.set_paused(is_paused);
-            }
+            self.audio
+                .set_paused(is_paused, self.renderer.as_deref_mut());
         }
         if was_paused && !is_paused {
             self.request_frame(qh);
@@ -545,13 +546,69 @@ impl OutputSurface {
         self.set_manual_paused(paused, qh);
     }
 
+    /// Sets the scale factor for this output, updating buffer scale and resizing the WGPU swapchain and renderer if changed.
+    pub fn set_scale_factor(
+        &mut self,
+        new_scale: i32,
+        gpu: &GpuContext<'_>,
+        qh: &QueueHandle<EngineState>,
+    ) {
+        let scale = new_scale.max(1);
+        if self.scale_factor == scale {
+            return;
+        }
+
+        tracing::info!(
+            output = ?self.name,
+            old_scale = self.scale_factor,
+            new_scale = scale,
+            "Output scale factor changed"
+        );
+
+        self.scale_factor = scale;
+        self.layer_surface.wl_surface().set_buffer_scale(scale);
+
+        if self.configured && self.logical_width > 0 && self.logical_height > 0 {
+            let physical_width = self.logical_width.saturating_mul(scale as u32);
+            let physical_height = self.logical_height.saturating_mul(scale as u32);
+
+            if self.width != physical_width || self.height != physical_height {
+                tracing::info!(
+                    output = ?self.name,
+                    old_physical_width = self.width,
+                    old_physical_height = self.height,
+                    new_physical_width = physical_width,
+                    new_physical_height = physical_height,
+                    scale = scale,
+                    "Reconfiguring wgpu surface after scale factor change"
+                );
+
+                self.width = physical_width;
+                self.height = physical_height;
+
+                if let (Some(surface), Some(config)) =
+                    (&self.wgpu_surface, &mut self.surface_config)
+                {
+                    config.width = physical_width;
+                    config.height = physical_height;
+                    surface.configure(gpu.device, config);
+                }
+
+                if let Some(renderer) = &mut self.renderer {
+                    renderer.resize(physical_width, physical_height);
+                }
+
+                self.request_frame(qh);
+            }
+        }
+    }
+
     /// Teardown when output is unplugged/destroyed.
     pub fn teardown(&mut self) {
         if let Some(mut renderer) = self.renderer.take() {
             renderer.teardown();
         }
-        self.audio_track = None;
-        self.audio_handle = None;
+        self.audio.clear();
         self.wgpu_surface = None;
         self.surface_config = None;
     }
@@ -630,5 +687,30 @@ mod tests {
             (None, None) => None,
         };
         assert_eq!(effective, Some(24.0));
+    }
+
+    #[test]
+    fn test_hidpi_scale_dimensions() {
+        let logical_width = 1920u32;
+        let logical_height = 1080u32;
+
+        let scale = 2i32;
+        let physical_width = logical_width.saturating_mul(scale.max(1) as u32);
+        let physical_height = logical_height.saturating_mul(scale.max(1) as u32);
+        assert_eq!(physical_width, 3840);
+        assert_eq!(physical_height, 2160);
+
+        let scale = 1i32;
+        let physical_width = logical_width.saturating_mul(scale.max(1) as u32);
+        let physical_height = logical_height.saturating_mul(scale.max(1) as u32);
+        assert_eq!(physical_width, 1920);
+        assert_eq!(physical_height, 1080);
+
+        // Negative or zero fallback to 1
+        let scale = 0i32;
+        let physical_width = logical_width.saturating_mul(scale.max(1) as u32);
+        let physical_height = logical_height.saturating_mul(scale.max(1) as u32);
+        assert_eq!(physical_width, 1920);
+        assert_eq!(physical_height, 1080);
     }
 }

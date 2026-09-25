@@ -8,7 +8,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use validate::validate_wallpaper;
+use validate::validate_wallpaper_with_socket;
 use wallrs_proto::{
     Command, OutputInfoProto, OutputSelector, PropertyValue, Response, default_socket_path,
 };
@@ -406,7 +406,7 @@ fn handle_preview(socket_path: &Path, args: PreviewArgs) -> Result<(), String> {
 fn run() -> Result<(), String> {
     let cli = Cli::parse();
     if let Subcommands::Validate(args) = cli.command {
-        return validate_wallpaper(&args.path);
+        return validate_wallpaper_with_socket(&args.path, cli.socket.as_deref());
     }
     if let Subcommands::New(args) = cli.command {
         return handle_new_wallpaper(args);
@@ -641,6 +641,8 @@ mod tests {
 
     #[test]
     fn test_validate_sample_wallpapers() {
+        use crate::validate::validate_wallpaper;
+
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let workspace_root = manifest_dir.parent().unwrap().parent().unwrap();
 
@@ -651,6 +653,21 @@ mod tests {
 
         let non_existent = workspace_root.join("examples/non_existent_wallpaper_123");
         assert!(validate_wallpaper(&non_existent).is_err());
+
+        let temp_dir = std::env::temp_dir().join("wallrs_test_broken_shader");
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let toml_broken = temp_dir.join("wallpaper.toml");
+        let _ = std::fs::write(
+            &toml_broken,
+            "[wallpaper]\nname = \"broken\"\ntype = \"shader\"\n\n[shader]\nentry = \"broken.wgsl\"\n",
+        );
+        let wgsl_broken = temp_dir.join("broken.wgsl");
+        let _ = std::fs::write(
+            &wgsl_broken,
+            "@fragment fn fs_main() -> vec4<f32> { return vec4(1.0);",
+        );
+        assert!(validate_wallpaper(&temp_dir).is_err());
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]

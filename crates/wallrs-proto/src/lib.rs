@@ -54,6 +54,9 @@ pub enum Command {
         output: String,
         path: PathBuf,
     },
+    ValidateWallpaper {
+        manifest_path: PathBuf,
+    },
     ListOutputs,
     Kill,
 }
@@ -476,6 +479,13 @@ mod tests {
         let json_mute = serde_json::to_string(&cmd_mute).unwrap();
         let parsed_mute: Command = serde_json::from_str(&json_mute).unwrap();
         assert_eq!(cmd_mute, parsed_mute);
+
+        let cmd_validate = Command::ValidateWallpaper {
+            manifest_path: PathBuf::from("/etc/wallpapers/aurora/wallpaper.toml"),
+        };
+        let json_validate = serde_json::to_string(&cmd_validate).unwrap();
+        let parsed_validate: Command = serde_json::from_str(&json_validate).unwrap();
+        assert_eq!(cmd_validate, parsed_validate);
 
         let cmd_list = Command::ListOutputs;
         let json_list = serde_json::to_string(&cmd_list).unwrap();

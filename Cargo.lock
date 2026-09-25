@@ -1755,10 +1755,8 @@ version = "1.2.0"
 dependencies = [
  "clap",
  "image",
- "naga",
  "serde",
  "serde_json",
- "wallrs-content-shader",
  "wallrs-proto",
 ]
 

@@ -262,6 +262,32 @@ fn is_valid_wgsl_identifier(s: &str) -> bool {
     chars.all(|c| c.is_alphanumeric() || c == '_')
 }
 
+/// Validates shader source code (GLSL or WGSL) using Naga without initializing a WGPU device.
+pub fn validate_shader_source(
+    source: &str,
+    is_glsl: bool,
+    named_uniforms: &[String],
+) -> Result<(), ShaderError> {
+    let wgsl = if is_glsl {
+        translate_shadertoy_glsl_to_wgsl(source)?
+    } else {
+        prepare_wgsl_with_uniforms(source, named_uniforms)
+    };
+
+    let module = naga::front::wgsl::parse_str(&wgsl)
+        .map_err(|e| ShaderError::Validation(e.emit_to_string(&wgsl)))?;
+
+    let mut validator = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::empty(),
+    );
+    validator
+        .validate(&module)
+        .map_err(|e| ShaderError::Validation(format!("{e:?}")))?;
+
+    Ok(())
+}
+
 /// Shader wallpaper renderer supporting native WGSL and Shadertoy GLSL via Naga.
 pub struct ShaderRenderer {
     entry_path: Option<PathBuf>,
@@ -848,5 +874,27 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         validator
             .validate(&module)
             .expect("visualizer Naga WGSL validation failed");
+    }
+
+    #[test]
+    fn test_validate_shader_source() {
+        let valid_wgsl = r#"
+@fragment
+fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
+    return vec4<f32>(uv.x, uv.y, 0.5, 1.0);
+}
+"#;
+        assert!(validate_shader_source(valid_wgsl, false, &[]).is_ok());
+
+        let invalid_wgsl = "this is not valid wgsl code syntax";
+        assert!(validate_shader_source(invalid_wgsl, false, &[]).is_err());
+
+        let valid_glsl = r#"
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord.xy / iResolution.xy;
+    fragColor = vec4(uv, 0.5, 1.0);
+}
+"#;
+        assert!(validate_shader_source(valid_glsl, true, &[]).is_ok());
     }
 }

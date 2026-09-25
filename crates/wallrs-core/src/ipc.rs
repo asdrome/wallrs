@@ -5,7 +5,6 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 use wallrs_proto::{Command, OutputInfoProto, OutputSelector, PropertyValue, Response};
-use wallrs_render::WallpaperRenderer;
 
 use crate::engine::EngineState;
 
@@ -114,7 +113,7 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                     width: out.width,
                     height: out.height,
                     paused: out.is_paused(),
-                    muted: out.audio_muted,
+                    muted: out.audio.is_muted(),
                     wallpaper: out.current_wallpaper.clone(),
                 })
                 .collect();
@@ -156,8 +155,7 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                             break;
                         }
                         out.current_wallpaper = None;
-                        out.audio_track = None;
-                        out.audio_handle = None;
+                        out.audio.clear();
                         continue;
                     }
 
@@ -324,7 +322,7 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                 if state.outputs.is_empty() {
                     Response::Ok
                 } else {
-                    let any_unmuted = state.outputs.values().any(|o| !o.audio_muted);
+                    let any_unmuted = state.outputs.values().any(|o| !o.audio.is_muted());
                     let target_muted = any_unmuted;
                     for out in state.outputs.values_mut() {
                         out.set_muted(target_muted);
@@ -438,7 +436,7 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                 .map_or(std::time::Duration::from_millis(16), |l| {
                     now.duration_since(l)
                 });
-            let spectrum_arc = out.audio_handle.as_ref().map(|h| h.latest());
+            let spectrum_arc = out.audio.spectrum();
             let spectrum = spectrum_arc.as_deref().map(|v| v.as_slice());
 
             let ctx = wallrs_render::FrameContext {
@@ -567,7 +565,151 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                 Err(_) => Response::Error("Channel disconnected while mapping buffer".into()),
             }
         }
+
+        Command::ValidateWallpaper { manifest_path } => validate_wallpaper_manifest(&manifest_path),
     }
+}
+
+/// Fully validates a wallpaper manifest, its assets, and shader WGSL/GLSL compilation via the daemon's GPU subsystem.
+pub fn validate_wallpaper_manifest(manifest_path: &Path) -> Response {
+    let manifest_file = if manifest_path.is_dir() {
+        manifest_path.join("wallpaper.toml")
+    } else {
+        manifest_path.to_path_buf()
+    };
+
+    if !manifest_file.exists() {
+        return Response::Error(format!("Manifest path does not exist: {manifest_file:?}"));
+    }
+
+    let manifest = match wallrs_proto::WallpaperManifest::from_file(&manifest_file) {
+        Ok(m) => m,
+        Err(e) => return Response::Error(format!("Syntax error in wallpaper.toml: {e}")),
+    };
+
+    let base_dir = manifest_file.parent().unwrap_or_else(|| Path::new("."));
+
+    match manifest.wallpaper.r#type.as_str() {
+        "image" => {
+            let Some(img) = &manifest.image else {
+                return Response::Error(
+                    "Manifest declares type 'image' but is missing [image] configuration block"
+                        .into(),
+                );
+            };
+            if img.layers.is_empty() {
+                return Response::Error(
+                    "Image wallpaper has 0 layers defined in [[image.layers]]".into(),
+                );
+            }
+            for (i, layer) in img.layers.iter().enumerate() {
+                let layer_file = if layer.path.is_absolute() {
+                    layer.path.clone()
+                } else {
+                    base_dir.join(&layer.path)
+                };
+                if !layer_file.exists() {
+                    return Response::Error(format!(
+                        "Layer {i} file does not exist: {layer_file:?}"
+                    ));
+                }
+                if let Err(e) = image::image_dimensions(&layer_file) {
+                    return Response::Error(format!(
+                        "Layer {i} file {layer_file:?} is not a valid image: {e}"
+                    ));
+                }
+            }
+        }
+        "shader" => {
+            let Some(sh) = &manifest.shader else {
+                return Response::Error(
+                    "Manifest declares type 'shader' but is missing [shader] configuration block"
+                        .into(),
+                );
+            };
+            let shader_file = if sh.entry.is_absolute() {
+                sh.entry.clone()
+            } else {
+                base_dir.join(&sh.entry)
+            };
+            if !shader_file.exists() {
+                return Response::Error(format!(
+                    "Shader entry file does not exist: {shader_file:?}"
+                ));
+            }
+            let shader_code = match std::fs::read_to_string(&shader_file) {
+                Ok(c) => c,
+                Err(e) => {
+                    return Response::Error(format!(
+                        "Failed to read shader file {shader_file:?}: {e}"
+                    ));
+                }
+            };
+
+            let is_glsl = shader_file.extension().and_then(|ext| ext.to_str()) == Some("glsl")
+                || shader_code.contains("void mainImage");
+
+            let named_uniforms = sh
+                .uniform_mapping
+                .clone()
+                .unwrap_or_else(|| sh.uniforms.keys().cloned().collect());
+
+            if let Err(e) = wallrs_content_shader::validate_shader_source(
+                &shader_code,
+                is_glsl,
+                &named_uniforms,
+            ) {
+                return Response::Error(format!("Shader validation error: {e}"));
+            }
+        }
+        "video" => {
+            let Some(vid) = &manifest.video else {
+                return Response::Error(
+                    "Manifest declares type 'video' but is missing [video] configuration block"
+                        .into(),
+                );
+            };
+            let video_file = if vid.path.is_absolute() {
+                vid.path.clone()
+            } else {
+                base_dir.join(&vid.path)
+            };
+            if !video_file.exists() {
+                return Response::Error(format!("Video file does not exist: {video_file:?}"));
+            }
+        }
+        other => {
+            return Response::Error(format!(
+                "Unknown wallpaper type: '{other}'. Expected 'image', 'shader', or 'video'"
+            ));
+        }
+    }
+
+    if let Some(audio) = &manifest.audio {
+        let audio_file = if audio.path.is_absolute() {
+            audio.path.clone()
+        } else {
+            base_dir.join(&audio.path)
+        };
+        if !audio_file.exists() {
+            return Response::Error(format!(
+                "Background audio track file does not exist: {audio_file:?}"
+            ));
+        }
+    }
+
+    if let Some(thumb) = &manifest.wallpaper.thumbnail {
+        let thumb_file = if thumb.is_absolute() {
+            thumb.clone()
+        } else {
+            base_dir.join(thumb)
+        };
+        if !thumb_file.exists() {
+            return Response::Error(format!("Thumbnail file does not exist: {thumb_file:?}"));
+        }
+    }
+
+    Response::Ok
 }
 
 /// Applies a wallpaper from a manifest file or directory to the matching outputs.
@@ -636,40 +778,13 @@ pub fn apply_wallpaper(
                         break;
                     }
                     out.current_wallpaper = Some(manifest_path.to_path_buf());
-                    out.audio_handle = None;
-
-                    if let Some(audio_cfg) = &manifest.audio {
-                        match wallrs_audio::BackgroundAudioPlayer::from_config(audio_cfg, base_dir)
-                        {
-                            Ok(mut player) => {
-                                if out.is_paused() {
-                                    player.set_paused(true);
-                                }
-                                if state.allow_audio {
-                                    let _ = player.set_property(
-                                        "mute",
-                                        wallrs_proto::PropertyValue::Bool(false),
-                                    );
-                                    out.audio_muted = false;
-                                } else {
-                                    let _ = player.set_property(
-                                        "mute",
-                                        wallrs_proto::PropertyValue::Bool(true),
-                                    );
-                                    out.audio_muted = true;
-                                }
-                                out.audio_track = Some(player);
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    error = ?e,
-                                    "Failed to load background audio track for image wallpaper"
-                                );
-                            }
-                        }
-                    } else {
-                        out.audio_track = None;
-                    }
+                    out.audio.detach_spectrum();
+                    out.audio.load_background_track(
+                        manifest.audio.as_ref(),
+                        base_dir,
+                        state.allow_audio,
+                        out.renderer.as_deref_mut(),
+                    );
                 }
             }
             state.maybe_stop_audio_capture();
@@ -726,40 +841,13 @@ pub fn apply_wallpaper(
                         break;
                     }
                     out.current_wallpaper = Some(manifest_path.to_path_buf());
-                    out.audio_handle = audio_handle.clone();
-
-                    if let Some(audio_cfg) = &manifest.audio {
-                        match wallrs_audio::BackgroundAudioPlayer::from_config(audio_cfg, base_dir)
-                        {
-                            Ok(mut player) => {
-                                if out.is_paused() {
-                                    player.set_paused(true);
-                                }
-                                if state.allow_audio {
-                                    let _ = player.set_property(
-                                        "mute",
-                                        wallrs_proto::PropertyValue::Bool(false),
-                                    );
-                                    out.audio_muted = false;
-                                } else {
-                                    let _ = player.set_property(
-                                        "mute",
-                                        wallrs_proto::PropertyValue::Bool(true),
-                                    );
-                                    out.audio_muted = true;
-                                }
-                                out.audio_track = Some(player);
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    error = ?e,
-                                    "Failed to load background audio track for shader wallpaper"
-                                );
-                            }
-                        }
-                    } else {
-                        out.audio_track = None;
-                    }
+                    out.audio.attach_spectrum(audio_handle.clone());
+                    out.audio.load_background_track(
+                        manifest.audio.as_ref(),
+                        base_dir,
+                        state.allow_audio,
+                        out.renderer.as_deref_mut(),
+                    );
                 }
             }
 
@@ -793,7 +881,7 @@ pub fn apply_wallpaper(
 
                 if matches {
                     matched = true;
-                    let mut renderer = match wallrs_content_video::VideoRenderer::from_manifest(
+                    let renderer = match wallrs_content_video::VideoRenderer::from_manifest(
                         &manifest, base_dir,
                     ) {
                         Ok(r) => Box::new(r),
@@ -802,16 +890,6 @@ pub fn apply_wallpaper(
                             break;
                         }
                     };
-
-                    if state.allow_audio {
-                        let _ =
-                            renderer.set_property("mute", wallrs_proto::PropertyValue::Bool(false));
-                        out.audio_muted = false;
-                    } else {
-                        let _ =
-                            renderer.set_property("mute", wallrs_proto::PropertyValue::Bool(true));
-                        out.audio_muted = true;
-                    }
 
                     if let Err(e) = out.set_renderer(
                         renderer,
@@ -823,8 +901,9 @@ pub fn apply_wallpaper(
                         break;
                     }
                     out.current_wallpaper = Some(manifest_path.to_path_buf());
-                    out.audio_track = None;
-                    out.audio_handle = None;
+                    out.audio.clear();
+                    out.audio
+                        .sync_renderer_audio(state.allow_audio, out.renderer.as_deref_mut());
                 }
             }
             state.maybe_stop_audio_capture();
@@ -920,5 +999,33 @@ mod tests {
         let json = serde_json::to_string(&set_cmd).unwrap();
         let parsed: Command = serde_json::from_str(&json).unwrap();
         assert_eq!(set_cmd, parsed);
+
+        let validate_cmd = Command::ValidateWallpaper {
+            manifest_path: PathBuf::from("examples/aurora-shader/wallpaper.toml"),
+        };
+        let json = serde_json::to_string(&validate_cmd).unwrap();
+        let parsed: Command = serde_json::from_str(&json).unwrap();
+        assert_eq!(validate_cmd, parsed);
+    }
+
+    #[test]
+    fn test_validate_wallpaper_manifest_samples() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+
+        let aurora = manifest_dir.join("examples/aurora-shader");
+        if aurora.exists() {
+            assert!(matches!(validate_wallpaper_manifest(&aurora), Response::Ok));
+        }
+
+        let nonexistent = manifest_dir.join("examples/nonexistent-xyz");
+        assert!(matches!(
+            validate_wallpaper_manifest(&nonexistent),
+            Response::Error(_)
+        ));
     }
 }
