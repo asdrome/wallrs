@@ -6,7 +6,7 @@
 #   Dispatched automatically (e.g., via wallrs-theme-sync.service or user hook)
 #   whenever wallrs changes the active wallpaper. Inspects the running desktop
 #   environment via $XDG_CURRENT_DESKTOP and triggers the corresponding accent
-#   color or theming tool (KDE Plasma, Matugen for Hyprland).
+#   color or theming tool (KDE Plasma, Matugen for Hyprland, Noctalia for Niri).
 # ==============================================================================
 
 set -euo pipefail
@@ -41,6 +41,16 @@ fi
 # 3. Desktop Environment Detection
 DESKTOP="${XDG_CURRENT_DESKTOP:-${DESKTOP_SESSION:-}}"
 
+if [[ -z "${DESKTOP:-}" || "${DESKTOP}" == "unknown" ]]; then
+    if [[ -n "${NIRI_SOCKET:-}" ]]; then
+        DESKTOP="niri"
+    elif [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
+        DESKTOP="Hyprland"
+    elif [[ -n "${SWAYSOCK:-}" ]]; then
+        DESKTOP="sway"
+    fi
+fi
+
 case "$DESKTOP" in
     *KDE*|*Plasma*)
         if [[ -x "$CONTRIB_DIR/kde-accent-color.sh" ]]; then
@@ -48,6 +58,20 @@ case "$DESKTOP" in
         else
             echo "wallrs-theme-sync: kde-accent-color.sh not found in $CONTRIB_DIR" >&2
             exit 1
+        fi
+        ;;
+    *niri*|*Niri*)
+        PREVIEW_PATH="$("$WALLCTL" preview "$@")"
+        if command -v noctalia &>/dev/null; then
+            # Sync wallpaper and reload Material You templates (Niri borders in noctalia.kdl, Kitty, GTK)
+            noctalia msg wallpaper-set "$PREVIEW_PATH" 2>/dev/null || true
+            noctalia theme "$PREVIEW_PATH" --builtin-config 2>/dev/null || true
+            noctalia msg templates-apply 2>/dev/null || true
+            exit 0
+        elif command -v matugen &>/dev/null; then
+            exec matugen image --prefer saturation "$PREVIEW_PATH"
+        elif command -v wal &>/dev/null; then
+            exec wal -i "$PREVIEW_PATH" -n -q
         fi
         ;;
     *Hyprland*|*sway*|*wlroots*|*Sway*)
@@ -58,7 +82,13 @@ case "$DESKTOP" in
             ML4W_WALLPAPER="$HOME/.config/ml4w/scripts/ml4w-wallpaper"
         fi
 
-        if [[ -n "$ML4W_WALLPAPER" ]]; then
+        if command -v noctalia &>/dev/null && pgrep -x noctalia &>/dev/null; then
+            PREVIEW_PATH="$("$WALLCTL" preview "$@")"
+            noctalia msg wallpaper-set "$PREVIEW_PATH" 2>/dev/null || true
+            noctalia theme "$PREVIEW_PATH" --builtin-config 2>/dev/null || true
+            noctalia msg templates-apply 2>/dev/null || true
+            exit 0
+        elif [[ -n "$ML4W_WALLPAPER" ]]; then
             PREVIEW_PATH="$("$WALLCTL" preview "$@")"
             exec "$ML4W_WALLPAPER" "$PREVIEW_PATH" --skip-wallpaper
         elif command -v matugen &>/dev/null && [[ -x "$CONTRIB_DIR/hyprland-matugen.sh" ]]; then
@@ -69,12 +99,16 @@ case "$DESKTOP" in
         fi
         ;;
     *)
-        # Fallback: check if matugen or pywal are available regardless of compositor
-        if command -v matugen &>/dev/null; then
-            PREVIEW_PATH="$("$WALLCTL" preview "$@")"
+        # Fallback: check if noctalia, matugen, or pywal are available regardless of compositor
+        PREVIEW_PATH="$("$WALLCTL" preview "$@")"
+        if command -v noctalia &>/dev/null && pgrep -x noctalia &>/dev/null; then
+            noctalia msg wallpaper-set "$PREVIEW_PATH" 2>/dev/null || true
+            noctalia theme "$PREVIEW_PATH" --builtin-config 2>/dev/null || true
+            noctalia msg templates-apply 2>/dev/null || true
+            exit 0
+        elif command -v matugen &>/dev/null; then
             exec matugen image --prefer saturation "$PREVIEW_PATH"
         elif command -v wal &>/dev/null; then
-            PREVIEW_PATH="$("$WALLCTL" preview "$@")"
             exec wal -i "$PREVIEW_PATH" -n -q
         fi
         ;;

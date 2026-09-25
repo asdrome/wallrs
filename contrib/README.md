@@ -69,6 +69,7 @@ Dispatches theming updates automatically based on the running desktop environmen
 
 - **Workflow**:
   - On KDE Plasma: executes `kde-accent-color.sh`.
+  - On Niri: synchronizes wallpaper state with Noctalia and executes `noctalia theme --builtin-config` (generating Material You tokens for `noctalia.kdl` window borders, Kitty, GTK) with fallback to `matugen` / `pywal`.
   - On Hyprland / Sway: executes `hyprland-matugen.sh` (or `matugen` directly).
 - **Systemd Integration (Recommended)**:
   Enable the included systemd path unit so theming updates automatically whenever `wallrsd` changes the wallpaper:
