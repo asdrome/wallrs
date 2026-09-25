@@ -254,7 +254,10 @@ impl OutputSurface {
             && fps > 0.0
             && let Some(last_render) = self.last_rendered_frame_time
         {
-            let min_interval = Duration::from_secs_f64(1.0 / fps);
+            // Apply a small tolerance (1.5ms) to prevent Wayland vblank timing jitter
+            // from causing missed frames when the monitor refresh rate is an integer multiple of target FPS
+            let min_interval =
+                Duration::from_secs_f64(1.0 / fps).saturating_sub(Duration::from_micros(1500));
             if now.duration_since(last_render) < min_interval {
                 // Skip render and re-register frame callback for next compositor vblank
                 if !self.frame_pending {

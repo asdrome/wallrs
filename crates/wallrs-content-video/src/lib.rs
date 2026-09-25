@@ -133,6 +133,8 @@ pub struct VideoRenderer {
     pipeline_gpu: Option<wgpu::RenderPipeline>,
     dirty: bool,
     cached_fps: Option<f64>,
+    cached_caps: Option<gst::Caps>,
+    cached_video_info: Option<gst_video::VideoInfo>,
     is_paused: bool,
 }
 
@@ -140,10 +142,10 @@ pub struct VideoRenderer {
 ///
 /// On systems with VA-API hardware acceleration (Intel Gen Graphics / AMD),
 /// `vapostproc` converts decoded NV12/YUV video frames directly into RGBA
-/// on the GPU, avoiding CPU-intensive software color conversion.
+/// on the GPU, avoiding CPU-intensive software color conversion and scaling.
 ///
 /// If VA-API is unavailable, it gracefully falls back to a multithreaded CPU
-/// `videoconvert` element (`n-threads=0`) feeding `appsink`.
+/// `videoscale` + `videoconvert` element (`n-threads=0`) feeding `appsink`.
 fn create_video_sink(appsink: &gst_app::AppSink) -> Result<gst::Element, VideoError> {
     if gst::ElementFactory::find("vapostproc").is_some() {
         let bin = gst::Bin::new();
@@ -151,34 +153,11 @@ fn create_video_sink(appsink: &gst_app::AppSink) -> Result<gst::Element, VideoEr
             .build()
             .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
 
-        let caps = gst_video::VideoCapsBuilder::for_encoding("video/x-raw")
-            .format(gst_video::VideoFormat::Rgba)
-            .build();
-        let capsfilter = gst::ElementFactory::make("capsfilter")
-            .property("caps", &caps)
-            .build()
+        bin.add_many([&vapostproc, appsink.upcast_ref()])
             .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
 
-        let videoconvert = gst::ElementFactory::make("videoconvert")
-            .property("n-threads", 0u32)
-            .build()
+        gst::Element::link_many([&vapostproc, appsink.upcast_ref()])
             .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
-
-        bin.add_many([
-            &vapostproc,
-            &capsfilter,
-            &videoconvert,
-            appsink.upcast_ref(),
-        ])
-        .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
-
-        gst::Element::link_many([
-            &vapostproc,
-            &capsfilter,
-            &videoconvert,
-            appsink.upcast_ref(),
-        ])
-        .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
 
         let sink_pad = vapostproc
             .static_pad("sink")
@@ -256,6 +235,8 @@ impl VideoRenderer {
             pipeline_gpu: None,
             dirty: true,
             cached_fps: None,
+            cached_caps: None,
+            cached_video_info: None,
             is_paused: false,
         }
     }
@@ -357,6 +338,8 @@ impl VideoRenderer {
             pipeline_gpu: None,
             dirty: true,
             cached_fps: None,
+            cached_caps: None,
+            cached_video_info: None,
             is_paused: false,
         })
     }
@@ -524,96 +507,110 @@ impl WallpaperRenderer for VideoRenderer {
         // Non-blocking attempt to retrieve the latest video frame
         if let Some(sample) = appsink.try_pull_sample(gst::ClockTime::ZERO)
             && let (Some(buffer), Some(caps)) = (sample.buffer(), sample.caps())
-            && let Ok(video_info) = gst_video::VideoInfo::from_caps(caps)
-            && let Ok(video_frame) =
-                gst_video::VideoFrameRef::from_buffer_ref_readable(buffer, &video_info)
-            && let Ok(data) = video_frame.plane_data(0)
         {
-            let w = video_info.width();
-            let h = video_info.height();
-            let stride = video_frame.plane_stride()[0] as u32;
-            if self.cached_fps.is_none() {
-                let fps_frac = video_info.fps();
-                if fps_frac.numer() > 0 && fps_frac.denom() > 0 {
-                    let rate = fps_frac.numer() as f64 / fps_frac.denom() as f64;
-                    if rate.is_finite() && (1.0..=240.0).contains(&rate) {
-                        self.cached_fps = Some(rate);
+            let video_info = if let Some(info) = &self.cached_video_info
+                && self.cached_caps.as_deref() == Some(caps)
+            {
+                info.clone()
+            } else if let Ok(info) = gst_video::VideoInfo::from_caps(caps) {
+                self.cached_caps = Some(caps.to_owned());
+                self.cached_video_info = Some(info.clone());
+                if self.cached_fps.is_none() {
+                    let fps_frac = info.fps();
+                    if fps_frac.numer() > 0 && fps_frac.denom() > 0 {
+                        let rate = fps_frac.numer() as f64 / fps_frac.denom() as f64;
+                        if rate.is_finite() && (1.0..=240.0).contains(&rate) {
+                            self.cached_fps = Some(rate);
+                        }
                     }
                 }
-            }
+                info
+            } else {
+                return;
+            };
 
-            if w > 0 && h > 0 {
-                // Recreate GPU texture if dimensions changed or first allocation
-                if self.video_width != w || self.video_height != h || self.texture.is_none() {
-                    self.video_width = w;
-                    self.video_height = h;
+            if let Ok(video_frame) =
+                gst_video::VideoFrameRef::from_buffer_ref_readable(buffer, &video_info)
+                && let Ok(data) = video_frame.plane_data(0)
+            {
+                let w = video_info.width();
+                let h = video_info.height();
+                let stride = video_frame.plane_stride()[0] as u32;
 
-                    let Some(bgl) = &self.bind_group_layout else {
-                        return;
-                    };
-                    let Some(sampler) = &self.sampler else {
-                        return;
-                    };
+                if w > 0 && h > 0 {
+                    // Recreate GPU texture if dimensions changed or first allocation
+                    if self.video_width != w || self.video_height != h || self.texture.is_none() {
+                        self.video_width = w;
+                        self.video_height = h;
 
-                    let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
-                        label: Some("video_frame_texture"),
-                        size: wgpu::Extent3d {
-                            width: w,
-                            height: h,
-                            depth_or_array_layers: 1,
-                        },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                        view_formats: &[],
-                    });
+                        let Some(bgl) = &self.bind_group_layout else {
+                            return;
+                        };
+                        let Some(sampler) = &self.sampler else {
+                            return;
+                        };
 
-                    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-                    let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("video_bind_group"),
-                        layout: bgl,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: wgpu::BindingResource::TextureView(&view),
+                        let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
+                            label: Some("video_frame_texture"),
+                            size: wgpu::Extent3d {
+                                width: w,
+                                height: h,
+                                depth_or_array_layers: 1,
                             },
-                            wgpu::BindGroupEntry {
-                                binding: 1,
-                                resource: wgpu::BindingResource::Sampler(sampler),
+                            mip_level_count: 1,
+                            sample_count: 1,
+                            dimension: wgpu::TextureDimension::D2,
+                            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                                | wgpu::TextureUsages::COPY_DST,
+                            view_formats: &[],
+                        });
+
+                        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+                        let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("video_bind_group"),
+                            layout: bgl,
+                            entries: &[
+                                wgpu::BindGroupEntry {
+                                    binding: 0,
+                                    resource: wgpu::BindingResource::TextureView(&view),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 1,
+                                    resource: wgpu::BindingResource::Sampler(sampler),
+                                },
+                            ],
+                        });
+
+                        self.texture = Some(texture);
+                        self.texture_view = Some(view);
+                        self.bind_group = Some(bind_group);
+                    }
+
+                    // Upload pixel data directly from GStreamer buffer into WGPU texture
+                    if let Some(texture) = &self.texture {
+                        ctx.queue.write_texture(
+                            wgpu::TexelCopyTextureInfo {
+                                texture,
+                                mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::TextureAspect::All,
                             },
-                        ],
-                    });
-
-                    self.texture = Some(texture);
-                    self.texture_view = Some(view);
-                    self.bind_group = Some(bind_group);
-                }
-
-                // Upload pixel data directly from GStreamer buffer into WGPU texture
-                if let Some(texture) = &self.texture {
-                    ctx.queue.write_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        data,
-                        wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(stride),
-                            rows_per_image: Some(h),
-                        },
-                        wgpu::Extent3d {
-                            width: w,
-                            height: h,
-                            depth_or_array_layers: 1,
-                        },
-                    );
-                    self.dirty = true;
+                            data,
+                            wgpu::TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(stride),
+                                rows_per_image: Some(h),
+                            },
+                            wgpu::Extent3d {
+                                width: w,
+                                height: h,
+                                depth_or_array_layers: 1,
+                            },
+                        );
+                        self.dirty = true;
+                    }
                 }
             }
         }

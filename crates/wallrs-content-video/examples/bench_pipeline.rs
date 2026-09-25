@@ -62,33 +62,12 @@ fn main() {
     let vapostproc = gst::ElementFactory::make("vapostproc")
         .build()
         .expect("Failed to create vapostproc");
-    let caps = gst_video::VideoCapsBuilder::for_encoding("video/x-raw")
-        .format(gst_video::VideoFormat::Rgba)
-        .build();
-    let capsfilter = gst::ElementFactory::make("capsfilter")
-        .property("caps", &caps)
-        .build()
-        .expect("Failed to create capsfilter");
-    let videoconvert = gst::ElementFactory::make("videoconvert")
-        .property("n-threads", 0u32)
-        .build()
-        .expect("Failed to create videoconvert");
 
-    bin.add_many([
-        &vapostproc,
-        &capsfilter,
-        &videoconvert,
-        appsink.upcast_ref(),
-    ])
-    .expect("Failed to add elements to sink bin");
+    bin.add_many([&vapostproc, appsink.upcast_ref()])
+        .expect("Failed to add elements to sink bin");
 
-    gst::Element::link_many([
-        &vapostproc,
-        &capsfilter,
-        &videoconvert,
-        appsink.upcast_ref(),
-    ])
-    .expect("Failed to link elements in sink bin");
+    gst::Element::link_many([&vapostproc, appsink.upcast_ref()])
+        .expect("Failed to link elements in sink bin");
 
     let sink_pad = vapostproc
         .static_pad("sink")
@@ -106,10 +85,16 @@ fn main() {
         playbin.set_property("audio-sink", &fakesink);
     }
 
-    playbin
-        .set_state(gst::State::Playing)
-        .expect("Failed to transition playbin to Playing");
     let bus = playbin.bus().expect("Failed to acquire bus");
+    if let Err(e) = playbin.set_state(gst::State::Playing) {
+        eprintln!("set_state(Playing) returned error: {e:?}");
+        while let Some(msg) = bus.pop() {
+            if let gst::MessageView::Error(err) = msg.view() {
+                eprintln!("Bus Error: {} (debug: {:?})", err.error(), err.debug());
+            }
+        }
+        panic!("Failed to transition playbin to Playing: {e:?}");
+    }
 
     let start_wall = Instant::now();
     let start_cpu = get_cpu_time();
