@@ -136,6 +136,94 @@ pub struct VideoRenderer {
     is_paused: bool,
 }
 
+/// Builds an optimized video sink element.
+///
+/// On systems with VA-API hardware acceleration (Intel Gen Graphics / AMD),
+/// `vapostproc` converts decoded NV12/YUV video frames directly into RGBA
+/// on the GPU, avoiding CPU-intensive software color conversion.
+///
+/// If VA-API is unavailable, it gracefully falls back to a multithreaded CPU
+/// `videoconvert` element (`n-threads=0`) feeding `appsink`.
+fn create_video_sink(appsink: &gst_app::AppSink) -> Result<gst::Element, VideoError> {
+    if gst::ElementFactory::find("vapostproc").is_some() {
+        let bin = gst::Bin::new();
+        let vapostproc = gst::ElementFactory::make("vapostproc")
+            .build()
+            .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
+
+        let caps = gst_video::VideoCapsBuilder::for_encoding("video/x-raw")
+            .format(gst_video::VideoFormat::Rgba)
+            .build();
+        let capsfilter = gst::ElementFactory::make("capsfilter")
+            .property("caps", &caps)
+            .build()
+            .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
+
+        let videoconvert = gst::ElementFactory::make("videoconvert")
+            .property("n-threads", 0u32)
+            .build()
+            .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
+
+        bin.add_many([
+            &vapostproc,
+            &capsfilter,
+            &videoconvert,
+            appsink.upcast_ref(),
+        ])
+        .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
+
+        gst::Element::link_many([
+            &vapostproc,
+            &capsfilter,
+            &videoconvert,
+            appsink.upcast_ref(),
+        ])
+        .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
+
+        let sink_pad = vapostproc
+            .static_pad("sink")
+            .ok_or_else(|| VideoError::PipelineCreate("vapostproc missing sink pad".into()))?;
+        let ghost_pad = gst::GhostPad::with_target(&sink_pad)
+            .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
+        ghost_pad
+            .set_active(true)
+            .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
+        bin.add_pad(&ghost_pad)
+            .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
+
+        return Ok(bin.upcast());
+    }
+
+    // Fallback path: multithreaded CPU videoscale + videoconvert directly feeding appsink
+    let bin = gst::Bin::new();
+    let videoscale = gst::ElementFactory::make("videoscale")
+        .property("n-threads", 0u32)
+        .build()
+        .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
+    let videoconvert = gst::ElementFactory::make("videoconvert")
+        .property("n-threads", 0u32)
+        .build()
+        .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
+
+    bin.add_many([&videoscale, &videoconvert, appsink.upcast_ref()])
+        .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
+    gst::Element::link_many([&videoscale, &videoconvert, appsink.upcast_ref()])
+        .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
+
+    let sink_pad = videoscale
+        .static_pad("sink")
+        .ok_or_else(|| VideoError::PipelineCreate("videoscale missing sink pad".into()))?;
+    let ghost_pad = gst::GhostPad::with_target(&sink_pad)
+        .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
+    ghost_pad
+        .set_active(true)
+        .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
+    bin.add_pad(&ghost_pad)
+        .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
+
+    Ok(bin.upcast())
+}
+
 // Safety: VideoRenderer owns the GStreamer elements, which are thread-safe and
 // accessed exclusively by the rendering thread in the calloop event loop.
 unsafe impl Send for VideoRenderer {}
@@ -208,7 +296,10 @@ impl VideoRenderer {
             .caps(&video_caps)
             .drop(true)
             .max_buffers(1)
+            .sync(true)
             .build();
+
+        let video_sink = create_video_sink(&appsink)?;
 
         // Attempt playbin3, falling back to playbin
         let playbin = gst::ElementFactory::make("playbin3")
@@ -217,23 +308,32 @@ impl VideoRenderer {
             .map_err(|e| VideoError::PipelineCreate(e.to_string()))?;
 
         playbin.set_property("uri", uri.as_str());
-        playbin.set_property("video-sink", &appsink);
-
-        // Configure audio sink: pipewiresink when available, fallback to autoaudiosink or fakesink
-        let audio_sink = gst::ElementFactory::make("pipewiresink")
-            .build()
-            .or_else(|_| gst::ElementFactory::make("autoaudiosink").build())
-            .ok();
-
-        if let Some(asink) = audio_sink {
-            playbin.set_property("audio-sink", &asink);
-        }
+        playbin.set_property("video-sink", &video_sink);
 
         let clamped_volume = volume.clamp(0.0, 100.0);
-        playbin.set_property("volume", clamped_volume / 100.0);
+        let has_audio = clamped_volume > 0.0;
 
-        // Always initialize in a strictly muted state
-        playbin.set_property("mute", true);
+        if has_audio {
+            playbin.set_property_from_str("flags", "video+audio+soft-volume+buffering");
+            let audio_sink = gst::ElementFactory::make("pipewiresink")
+                .build()
+                .or_else(|_| gst::ElementFactory::make("autoaudiosink").build())
+                .ok();
+            if let Some(asink) = audio_sink {
+                playbin.set_property("audio-sink", &asink);
+            }
+            playbin.set_property("volume", clamped_volume / 100.0);
+            playbin.set_property("mute", false);
+        } else {
+            // Highly optimized wallpaper mode: video-only decoding, buffering,
+            // no audio pipeline, no subtitle processing, no software deinterlacing/colorbalance.
+            playbin.set_property_from_str("flags", "video+buffering");
+            if let Ok(fakesink) = gst::ElementFactory::make("fakesink").build() {
+                playbin.set_property("audio-sink", &fakesink);
+            }
+            playbin.set_property("volume", 0.0);
+            playbin.set_property("mute", true);
+        }
 
         let _ = playbin.set_state(gst::State::Playing);
         let bus = playbin.bus();
@@ -370,6 +470,22 @@ impl WallpaperRenderer for VideoRenderer {
             self.width = width;
             self.height = height;
             self.dirty = true;
+
+            // Cap the maximum appsink resolution to the output's physical dimensions.
+            // When a 4K video is played on a 1080p display, this informs the hardware post-processor
+            // (vapostproc) to downscale on the GPU before memory download, reducing PCIe bandwidth
+            // from 1 GB/s (33.2 MB/frame) down to 250 MB/s (8.3 MB/frame) and slashing CPU usage.
+            if width > 0
+                && height > 0
+                && let Some(appsink) = &self.appsink
+            {
+                let video_caps = gst::Caps::builder("video/x-raw")
+                    .field("format", "RGBA")
+                    .field("width", gst::IntRange::new(1, width as i32))
+                    .field("height", gst::IntRange::new(1, height as i32))
+                    .build();
+                appsink.set_caps(Some(&video_caps));
+            }
         }
     }
 
@@ -567,8 +683,24 @@ impl WallpaperRenderer for VideoRenderer {
                 }
             }
             ("volume", PropertyValue::Number(n)) => {
+                let old_vol = self.volume;
                 self.volume = (n as f64).clamp(0.0, 100.0);
                 if let Some(pipeline) = &self.pipeline {
+                    if old_vol <= 0.0 && self.volume > 0.0 {
+                        pipeline
+                            .set_property_from_str("flags", "video+audio+soft-volume+buffering");
+                        if let Ok(asink) = gst::ElementFactory::make("pipewiresink")
+                            .build()
+                            .or_else(|_| gst::ElementFactory::make("autoaudiosink").build())
+                        {
+                            pipeline.set_property("audio-sink", &asink);
+                        }
+                    } else if old_vol > 0.0 && self.volume <= 0.0 {
+                        pipeline.set_property_from_str("flags", "video+buffering");
+                        if let Ok(fakesink) = gst::ElementFactory::make("fakesink").build() {
+                            pipeline.set_property("audio-sink", &fakesink);
+                        }
+                    }
                     pipeline.set_property("volume", self.volume / 100.0);
                     pipeline.set_property("mute", self.volume <= 0.0);
                 }

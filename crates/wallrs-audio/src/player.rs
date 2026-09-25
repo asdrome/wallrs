@@ -58,6 +58,8 @@ impl BackgroundAudioPlayer {
             .map_err(|e| AudioPlayerError::PipelineCreate(e.to_string()))?;
 
         playbin.set_property("uri", uri.as_str());
+        // Configure headless audio-only flags (skip video decoders, parsers, subtitles)
+        playbin.set_property_from_str("flags", "audio+soft-volume+buffering");
 
         // Configure headless audio-only sinks
         if let Ok(video_sink) = gst::ElementFactory::make("fakesink").build() {
