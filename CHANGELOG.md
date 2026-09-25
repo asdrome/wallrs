@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Dynamic HiDPI Scaling on Wayland (`wallrs-core`)**: Implemented `CompositorHandler::scale_factor_changed` and `OutputHandler` scale factor tracking. Surfaces dynamically call `wl_surface::set_buffer_scale`, recompute physical framebuffer dimensions ($\text{Physical} = \text{Logical} \times \text{Scale}$), and reconfigure WGPU swapchains and renderer viewports on scale factor changes without requiring daemon restarts.
+- **HiDPI-Aware Pointer Coordinate Normalization**: Separated `logical_width` and `logical_height` from physical framebuffer dimensions on `OutputSurface`, ensuring cursor coordinates from Wayland pointer motion events are normalized accurately across $[-1.0, 1.0]$ on high-density displays (e.g. 4K at 2x) without restricting cursor parallax to the top-left quadrant.
+
 ## [1.2.0] - 2026-09-16
 
 ### Added

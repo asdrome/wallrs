@@ -119,10 +119,20 @@ impl CompositorHandler for EngineState {
     fn scale_factor_changed(
         &mut self,
         _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _surface: &wl_surface::WlSurface,
-        _new_factor: i32,
+        qh: &QueueHandle<Self>,
+        surface: &wl_surface::WlSurface,
+        new_factor: i32,
     ) {
+        let surface_id = surface.id();
+        if let Some(out) = self.outputs.get_mut(&surface_id) {
+            let gpu = crate::output::GpuContext {
+                instance: &self.wgpu_instance,
+                adapter: &self.wgpu_adapter,
+                device: &self.wgpu_device,
+                queue: &self.wgpu_queue,
+            };
+            out.set_scale_factor(new_factor, &gpu, qh);
+        }
     }
 
     fn transform_changed(
@@ -176,8 +186,14 @@ impl OutputHandler for EngineState {
         qh: &QueueHandle<Self>,
         output: wl_output::WlOutput,
     ) {
-        let name = self.output_state.info(&output).and_then(|info| info.name);
-        tracing::info!(output = ?name, "New output detected; creating background layer surface");
+        let info = self.output_state.info(&output);
+        let name = info.as_ref().and_then(|info| info.name.clone());
+        let scale_factor = info
+            .as_ref()
+            .map(|info| info.scale_factor)
+            .unwrap_or(1)
+            .max(1);
+        tracing::info!(output = ?name, scale_factor = scale_factor, "New output detected; creating background layer surface");
 
         let surface = self.compositor_state.create_surface(qh);
         let layer_surface = self.layer_shell.create_layer_surface(
@@ -202,6 +218,7 @@ impl OutputHandler for EngineState {
 
         let surface_id = layer_surface.wl_surface().id();
         let mut output_surface = OutputSurface::new(name, output, layer_surface, self.max_fps);
+        output_surface.scale_factor = scale_factor;
         output_surface.audio_handle = self.audio_handle.clone();
         self.outputs.insert(surface_id, output_surface);
         if self.fullscreen_pause {
@@ -212,15 +229,28 @@ impl OutputHandler for EngineState {
     fn update_output(
         &mut self,
         _conn: &Connection,
-        _qh: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
         output: wl_output::WlOutput,
     ) {
-        let name = self.output_state.info(&output).and_then(|info| info.name);
+        let info = self.output_state.info(&output);
+        let name = info.as_ref().and_then(|info| info.name.clone());
+        let scale_factor = info
+            .as_ref()
+            .map(|info| info.scale_factor)
+            .unwrap_or(1)
+            .max(1);
         let mut to_restore = None;
         for (id, out) in self.outputs.iter_mut() {
             if out.wl_output == output {
                 let had_no_name = out.name.is_none();
                 out.name = name.clone();
+                let gpu = crate::output::GpuContext {
+                    instance: &self.wgpu_instance,
+                    adapter: &self.wgpu_adapter,
+                    device: &self.wgpu_device,
+                    queue: &self.wgpu_queue,
+                };
+                out.set_scale_factor(scale_factor, &gpu, qh);
                 if had_no_name && out.configured && name.is_some() {
                     to_restore = Some(id.clone());
                 }
@@ -374,12 +404,13 @@ impl PointerHandler for EngineState {
             if let PointerEventKind::Motion { .. } | PointerEventKind::Enter { .. } = event.kind {
                 let surface_id = event.surface.id();
                 if let Some(out) = self.outputs.get_mut(&surface_id)
-                    && out.width > 0
-                    && out.height > 0
+                    && out.logical_width > 0
+                    && out.logical_height > 0
                 {
-                    let norm_x =
-                        ((event.position.0 as f32 / out.width as f32) * 2.0 - 1.0).clamp(-1.0, 1.0);
-                    let norm_y = ((event.position.1 as f32 / out.height as f32) * 2.0 - 1.0)
+                    let norm_x = ((event.position.0 as f32 / out.logical_width as f32) * 2.0 - 1.0)
+                        .clamp(-1.0, 1.0);
+                    let norm_y = ((event.position.1 as f32 / out.logical_height as f32) * 2.0
+                        - 1.0)
                         .clamp(-1.0, 1.0);
                     let new_pos = Some((norm_x, norm_y));
                     if out.cursor_position != new_pos {
