@@ -18,6 +18,65 @@ pub enum ImageError {
     NoLayers,
 }
 
+/// Factory plugin for constructing and validating image wallpapers.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ImageRendererFactory;
+
+impl ImageRendererFactory {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl wallrs_render::RendererFactory for ImageRendererFactory {
+    fn create_renderer(
+        &self,
+        manifest: &WallpaperManifest,
+        base_dir: &Path,
+    ) -> Result<Box<dyn WallpaperRenderer>, RendererError> {
+        let renderer = ImageRenderer::from_manifest(manifest, base_dir)
+            .map_err(|e| RendererError::InitFailed(e.to_string()))?;
+        Ok(Box::new(renderer))
+    }
+
+    fn supports_type(&self, type_name: &str) -> bool {
+        type_name == "image"
+    }
+
+    fn validate(&self, manifest: &WallpaperManifest, base_dir: &Path) -> Result<(), RendererError> {
+        let Some(image_config) = &manifest.image else {
+            return Err(RendererError::ValidationFailed(
+                "Manifest declares type 'image' but is missing [image] configuration block".into(),
+            ));
+        };
+        if image_config.layers.is_empty() {
+            return Err(RendererError::ValidationFailed(
+                "Image wallpaper must define at least one layer in [image.layers]".into(),
+            ));
+        }
+        for layer in &image_config.layers {
+            let full_path = if layer.path.is_absolute() {
+                layer.path.clone()
+            } else {
+                base_dir.join(&layer.path)
+            };
+            if !full_path.exists() {
+                return Err(RendererError::ValidationFailed(format!(
+                    "Image layer file does not exist: {full_path:?}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn capabilities(&self, _manifest: &WallpaperManifest) -> wallrs_render::RendererCapabilities {
+        wallrs_render::RendererCapabilities {
+            needs_audio_spectrum: false,
+            produces_audio: false,
+        }
+    }
+}
+
 const SHADER_SRC: &str = r#"
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -1216,5 +1275,30 @@ mod tests {
         // Custom FPS override
         motion_renderer.custom_fps = Some(30.0);
         assert_eq!(motion_renderer.target_fps(), Some(30.0));
+    }
+
+    #[test]
+    fn test_image_renderer_factory() {
+        use wallrs_render::RendererFactory;
+        let factory = ImageRendererFactory;
+        assert!(factory.supports_type("image"));
+        assert!(!factory.supports_type("shader"));
+
+        let manifest = WallpaperManifest::from_toml_str(
+            r#"
+            [wallpaper]
+            name = "test-image"
+            type = "image"
+
+            [image]
+            layers = [{ path = "does_not_exist.png" }]
+            "#,
+        )
+        .unwrap();
+
+        assert!(factory.validate(&manifest, Path::new(".")).is_err());
+        let caps = factory.capabilities(&manifest);
+        assert!(!caps.needs_audio_spectrum);
+        assert!(!caps.produces_audio);
     }
 }

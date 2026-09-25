@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Plugin Architecture & Dynamic Factory Registry (`wallrs-render` & `wallrs-core`)**: Fully decoupled `wallrs-core` from direct dependencies on concrete content renderers (`wallrs-content-image`, `wallrs-content-shader`, `wallrs-content-video`). Introduced `RendererFactory`, `RendererRegistry`, and `RendererCapabilities` in `wallrs-render`, enabling dynamic wallpaper renderer registration and inversion of control.
+- **Content Renderer Factories**: Implemented `ImageRendererFactory`, `ShaderRendererFactory`, and `VideoRendererFactory` in their respective crates, encapsulating asset validation and instantiation without early GPU resource allocation.
+- **Dynamic Dependency Injection in Daemon (`wallrsd`)**: Configured `wallrs-daemon` to register all content factories into `RendererRegistry` at startup and inject the registry into `EngineConfig`.
+- **Unified Engine & IPC Dispatch Pipeline**: Replaced hardcoded type-switching branches in `wallrs-core/src/ipc.rs` (`apply_wallpaper` and `validate_wallpaper_manifest`) with a single unified, factory-driven lookup and construction loop.
+- **Unified Audio Lifecycle Controller (`AudioController`)**: Consolidated background audio playback, volume management, mute/unmute state, pause dispatch, and PipeWire spectrum attachment into `AudioController` on `OutputSurface`.
+- **Decoupled CLI Dependency Tree**: Removed unused content render dependencies from `wallrs-cli` (`wallctl`).
 - **Dynamic HiDPI Scaling on Wayland (`wallrs-core`)**: Implemented `CompositorHandler::scale_factor_changed` and `OutputHandler` scale factor tracking. Surfaces dynamically call `wl_surface::set_buffer_scale`, recompute physical framebuffer dimensions ($\text{Physical} = \text{Logical} \times \text{Scale}$), and reconfigure WGPU swapchains and renderer viewports on scale factor changes without requiring daemon restarts.
 - **HiDPI-Aware Pointer Coordinate Normalization**: Separated `logical_width` and `logical_height` from physical framebuffer dimensions on `OutputSurface`, ensuring cursor coordinates from Wayland pointer motion events are normalized accurately across $[-1.0, 1.0]$ on high-density displays (e.g. 4K at 2x) without restricting cursor parallax to the top-left quadrant.
 

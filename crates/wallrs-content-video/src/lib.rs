@@ -19,6 +19,58 @@ pub enum VideoError {
     RenderContextCreate(i32),
 }
 
+/// Factory plugin for constructing and validating video wallpapers.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct VideoRendererFactory;
+
+impl VideoRendererFactory {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl wallrs_render::RendererFactory for VideoRendererFactory {
+    fn create_renderer(
+        &self,
+        manifest: &WallpaperManifest,
+        base_dir: &Path,
+    ) -> Result<Box<dyn WallpaperRenderer>, RendererError> {
+        let renderer = VideoRenderer::from_manifest(manifest, base_dir)
+            .map_err(|e| RendererError::InitFailed(e.to_string()))?;
+        Ok(Box::new(renderer))
+    }
+
+    fn supports_type(&self, type_name: &str) -> bool {
+        type_name == "video"
+    }
+
+    fn validate(&self, manifest: &WallpaperManifest, base_dir: &Path) -> Result<(), RendererError> {
+        let Some(video_config) = &manifest.video else {
+            return Err(RendererError::ValidationFailed(
+                "Manifest declares type 'video' but is missing [video] configuration block".into(),
+            ));
+        };
+        let full_path = if video_config.path.is_absolute() {
+            video_config.path.clone()
+        } else {
+            base_dir.join(&video_config.path)
+        };
+        if !full_path.exists() {
+            return Err(RendererError::ValidationFailed(format!(
+                "Video source file does not exist: {full_path:?}"
+            )));
+        }
+        Ok(())
+    }
+
+    fn capabilities(&self, _manifest: &WallpaperManifest) -> wallrs_render::RendererCapabilities {
+        wallrs_render::RendererCapabilities {
+            needs_audio_spectrum: false,
+            produces_audio: true,
+        }
+    }
+}
+
 const VIDEO_SHADER_SRC: &str = r#"
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -818,5 +870,30 @@ mod tests {
         renderer.cached_fps = Some(30.0);
         assert_eq!(renderer.cached_fps, Some(30.0));
         assert!(renderer.target_fps().is_none());
+    }
+
+    #[test]
+    fn test_video_renderer_factory() {
+        use wallrs_render::RendererFactory;
+        let factory = VideoRendererFactory;
+        assert!(factory.supports_type("video"));
+        assert!(!factory.supports_type("shader"));
+
+        let manifest = WallpaperManifest::from_toml_str(
+            r#"
+            [wallpaper]
+            name = "test-video"
+            type = "video"
+
+            [video]
+            path = "does_not_exist.mp4"
+            "#,
+        )
+        .unwrap();
+
+        assert!(factory.validate(&manifest, Path::new(".")).is_err());
+        let caps = factory.capabilities(&manifest);
+        assert!(!caps.needs_audio_spectrum);
+        assert!(caps.produces_audio);
     }
 }

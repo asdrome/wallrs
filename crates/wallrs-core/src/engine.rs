@@ -113,6 +113,7 @@ pub struct EngineState {
     pub state_snapshot: crate::state::StateSnapshot,
     pub state_path: PathBuf,
     pub restore_state: bool,
+    pub registry: wallrs_render::RendererRegistry,
 }
 
 impl CompositorHandler for EngineState {
@@ -219,7 +220,9 @@ impl OutputHandler for EngineState {
         let surface_id = layer_surface.wl_surface().id();
         let mut output_surface = OutputSurface::new(name, output, layer_surface, self.max_fps);
         output_surface.scale_factor = scale_factor;
-        output_surface.audio_handle = self.audio_handle.clone();
+        output_surface
+            .audio
+            .attach_spectrum(self.audio_handle.clone());
         self.outputs.insert(surface_id, output_surface);
         if self.fullscreen_pause {
             self.update_fullscreen_pause();
@@ -655,7 +658,7 @@ impl EngineState {
 
     /// Stops PipeWire audio capture if no outputs currently have an active audio handle.
     pub fn maybe_stop_audio_capture(&mut self) {
-        let any_audio = self.outputs.values().any(|out| out.audio_handle.is_some());
+        let any_audio = self.outputs.values().any(|out| out.audio.has_spectrum());
         if !any_audio && self.audio_capture.is_some() {
             tracing::info!("No active audio-reactive outputs; stopping PipeWire audio capture");
             if let Some(mut capture) = self.audio_capture.take() {
@@ -689,7 +692,7 @@ impl EngineState {
                     name.clone(),
                     crate::state::SavedOutputConfig::Wallpaper {
                         path: wallpaper_dir.clone(),
-                        muted: out.audio_muted,
+                        muted: out.audio.is_muted(),
                         properties: HashMap::new(),
                     },
                 );
@@ -830,8 +833,7 @@ impl EngineState {
                         self.compositor_state.wl_compositor(),
                     );
                     out.current_wallpaper = None;
-                    out.audio_track = None;
-                    out.audio_handle = None;
+                    out.audio.clear();
                 }
             }
         }
@@ -1029,6 +1031,7 @@ impl Engine {
             state_snapshot,
             state_path,
             restore_state,
+            registry: config.registry,
         };
 
         Ok(Self {

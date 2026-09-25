@@ -22,6 +22,77 @@ pub enum ShaderError {
     NoEntry,
 }
 
+/// Factory plugin for constructing and validating shader wallpapers.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ShaderRendererFactory;
+
+impl ShaderRendererFactory {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl wallrs_render::RendererFactory for ShaderRendererFactory {
+    fn create_renderer(
+        &self,
+        manifest: &WallpaperManifest,
+        base_dir: &Path,
+    ) -> Result<Box<dyn WallpaperRenderer>, RendererError> {
+        let renderer = ShaderRenderer::from_manifest(manifest, base_dir)
+            .map_err(|e| RendererError::InitFailed(e.to_string()))?;
+        Ok(Box::new(renderer))
+    }
+
+    fn supports_type(&self, type_name: &str) -> bool {
+        type_name == "shader"
+    }
+
+    fn validate(&self, manifest: &WallpaperManifest, base_dir: &Path) -> Result<(), RendererError> {
+        let Some(sh) = &manifest.shader else {
+            return Err(RendererError::ValidationFailed(
+                "Manifest declares type 'shader' but is missing [shader] configuration block"
+                    .into(),
+            ));
+        };
+        let shader_file = if sh.entry.is_absolute() {
+            sh.entry.clone()
+        } else {
+            base_dir.join(&sh.entry)
+        };
+        if !shader_file.exists() {
+            return Err(RendererError::ValidationFailed(format!(
+                "Shader entry file does not exist: {shader_file:?}"
+            )));
+        }
+        let shader_code = std::fs::read_to_string(&shader_file).map_err(|e| {
+            RendererError::ValidationFailed(format!(
+                "Failed to read shader file {shader_file:?}: {e}"
+            ))
+        })?;
+
+        let is_glsl = shader_file.extension().and_then(|ext| ext.to_str()) == Some("glsl")
+            || shader_code.contains("void mainImage");
+
+        let named_uniforms = sh
+            .uniform_mapping
+            .clone()
+            .unwrap_or_else(|| sh.uniforms.keys().cloned().collect());
+
+        crate::validate_shader_source(&shader_code, is_glsl, &named_uniforms).map_err(|e| {
+            RendererError::ValidationFailed(format!("Shader validation error: {e}"))
+        })?;
+
+        Ok(())
+    }
+
+    fn capabilities(&self, _manifest: &WallpaperManifest) -> wallrs_render::RendererCapabilities {
+        wallrs_render::RendererCapabilities {
+            needs_audio_spectrum: true,
+            produces_audio: false,
+        }
+    }
+}
+
 pub const STANDARD_VS_WGSL: &str = r#"
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -896,5 +967,30 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
 }
 "#;
         assert!(validate_shader_source(valid_glsl, true, &[]).is_ok());
+    }
+
+    #[test]
+    fn test_shader_renderer_factory() {
+        use wallrs_render::RendererFactory;
+        let factory = ShaderRendererFactory;
+        assert!(factory.supports_type("shader"));
+        assert!(!factory.supports_type("image"));
+
+        let manifest = WallpaperManifest::from_toml_str(
+            r#"
+            [wallpaper]
+            name = "test-shader"
+            type = "shader"
+
+            [shader]
+            entry = "does_not_exist.wgsl"
+            "#,
+        )
+        .unwrap();
+
+        assert!(factory.validate(&manifest, Path::new(".")).is_err());
+        let caps = factory.capabilities(&manifest);
+        assert!(caps.needs_audio_spectrum);
+        assert!(!caps.produces_audio);
     }
 }

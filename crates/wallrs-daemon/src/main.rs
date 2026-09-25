@@ -1,6 +1,9 @@
 use clap::Parser;
+use wallrs_content_image::ImageRendererFactory;
+use wallrs_content_shader::ShaderRendererFactory;
+use wallrs_content_video::VideoRendererFactory;
 use wallrs_core::{Engine, EngineError};
-use wallrs_render::SolidColorRenderer;
+use wallrs_render::{RendererRegistry, SolidColorRenderer};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -80,6 +83,11 @@ fn main() {
         }
     };
 
+    let mut registry = RendererRegistry::new();
+    registry.register(ImageRendererFactory::new());
+    registry.register(ShaderRendererFactory::new());
+    registry.register(VideoRendererFactory::new());
+
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
         color = ?initial_color,
@@ -87,6 +95,7 @@ fn main() {
         fullscreen_pause = !args.no_fullscreen_pause,
         pause_on_maximized,
         layer = ?layer,
+        factories_count = registry.len(),
         "Initializing wallrsd live wallpaper daemon"
     );
 
@@ -99,6 +108,7 @@ fn main() {
         restore_state: !args.no_restore,
         state_path: args.state_file,
         layer,
+        registry,
     };
 
     let mut engine = match Engine::with_config(
@@ -195,5 +205,19 @@ mod tests {
             args2.state_file,
             Some(std::path::PathBuf::from("/tmp/custom_state.json"))
         );
+    }
+
+    #[test]
+    fn test_daemon_registry_initialization() {
+        let mut registry = RendererRegistry::new();
+        registry.register(ImageRendererFactory::new());
+        registry.register(ShaderRendererFactory::new());
+        registry.register(VideoRendererFactory::new());
+
+        assert_eq!(registry.len(), 3);
+        assert!(registry.is_supported("image"));
+        assert!(registry.is_supported("shader"));
+        assert!(registry.is_supported("video"));
+        assert!(!registry.is_supported("unknown"));
     }
 }

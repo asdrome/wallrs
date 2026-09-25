@@ -566,12 +566,17 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
             }
         }
 
-        Command::ValidateWallpaper { manifest_path } => validate_wallpaper_manifest(&manifest_path),
+        Command::ValidateWallpaper { manifest_path } => {
+            validate_wallpaper_manifest(&manifest_path, Some(&state.registry))
+        }
     }
 }
 
-/// Fully validates a wallpaper manifest, its assets, and shader WGSL/GLSL compilation via the daemon's GPU subsystem.
-pub fn validate_wallpaper_manifest(manifest_path: &Path) -> Response {
+/// Fully validates a wallpaper manifest, its assets, and type-specific rules via registered factories.
+pub fn validate_wallpaper_manifest(
+    manifest_path: &Path,
+    registry: Option<&wallrs_render::RendererRegistry>,
+) -> Response {
     let manifest_file = if manifest_path.is_dir() {
         manifest_path.join("wallpaper.toml")
     } else {
@@ -588,102 +593,6 @@ pub fn validate_wallpaper_manifest(manifest_path: &Path) -> Response {
     };
 
     let base_dir = manifest_file.parent().unwrap_or_else(|| Path::new("."));
-
-    match manifest.wallpaper.r#type.as_str() {
-        "image" => {
-            let Some(img) = &manifest.image else {
-                return Response::Error(
-                    "Manifest declares type 'image' but is missing [image] configuration block"
-                        .into(),
-                );
-            };
-            if img.layers.is_empty() {
-                return Response::Error(
-                    "Image wallpaper has 0 layers defined in [[image.layers]]".into(),
-                );
-            }
-            for (i, layer) in img.layers.iter().enumerate() {
-                let layer_file = if layer.path.is_absolute() {
-                    layer.path.clone()
-                } else {
-                    base_dir.join(&layer.path)
-                };
-                if !layer_file.exists() {
-                    return Response::Error(format!(
-                        "Layer {i} file does not exist: {layer_file:?}"
-                    ));
-                }
-                if let Err(e) = image::image_dimensions(&layer_file) {
-                    return Response::Error(format!(
-                        "Layer {i} file {layer_file:?} is not a valid image: {e}"
-                    ));
-                }
-            }
-        }
-        "shader" => {
-            let Some(sh) = &manifest.shader else {
-                return Response::Error(
-                    "Manifest declares type 'shader' but is missing [shader] configuration block"
-                        .into(),
-                );
-            };
-            let shader_file = if sh.entry.is_absolute() {
-                sh.entry.clone()
-            } else {
-                base_dir.join(&sh.entry)
-            };
-            if !shader_file.exists() {
-                return Response::Error(format!(
-                    "Shader entry file does not exist: {shader_file:?}"
-                ));
-            }
-            let shader_code = match std::fs::read_to_string(&shader_file) {
-                Ok(c) => c,
-                Err(e) => {
-                    return Response::Error(format!(
-                        "Failed to read shader file {shader_file:?}: {e}"
-                    ));
-                }
-            };
-
-            let is_glsl = shader_file.extension().and_then(|ext| ext.to_str()) == Some("glsl")
-                || shader_code.contains("void mainImage");
-
-            let named_uniforms = sh
-                .uniform_mapping
-                .clone()
-                .unwrap_or_else(|| sh.uniforms.keys().cloned().collect());
-
-            if let Err(e) = wallrs_content_shader::validate_shader_source(
-                &shader_code,
-                is_glsl,
-                &named_uniforms,
-            ) {
-                return Response::Error(format!("Shader validation error: {e}"));
-            }
-        }
-        "video" => {
-            let Some(vid) = &manifest.video else {
-                return Response::Error(
-                    "Manifest declares type 'video' but is missing [video] configuration block"
-                        .into(),
-                );
-            };
-            let video_file = if vid.path.is_absolute() {
-                vid.path.clone()
-            } else {
-                base_dir.join(&vid.path)
-            };
-            if !video_file.exists() {
-                return Response::Error(format!("Video file does not exist: {video_file:?}"));
-            }
-        }
-        other => {
-            return Response::Error(format!(
-                "Unknown wallpaper type: '{other}'. Expected 'image', 'shader', or 'video'"
-            ));
-        }
-    }
 
     if let Some(audio) = &manifest.audio {
         let audio_file = if audio.path.is_absolute() {
@@ -706,6 +615,22 @@ pub fn validate_wallpaper_manifest(manifest_path: &Path) -> Response {
         };
         if !thumb_file.exists() {
             return Response::Error(format!("Thumbnail file does not exist: {thumb_file:?}"));
+        }
+    }
+
+    if let Some(reg) = registry {
+        match reg.get(&manifest.wallpaper.r#type) {
+            Some(factory) => {
+                if let Err(e) = factory.validate(&manifest, base_dir) {
+                    return Response::Error(format!("Validation error: {e}"));
+                }
+            }
+            None => {
+                return Response::Error(format!(
+                    "Unsupported wallpaper type: '{}'. No matching renderer factory registered.",
+                    manifest.wallpaper.r#type
+                ));
+            }
         }
     }
 
@@ -735,188 +660,89 @@ pub fn apply_wallpaper(
 
     let base_dir = manifest_file.parent().unwrap_or_else(|| Path::new("."));
 
-    match manifest.wallpaper.r#type.as_str() {
-        "image" => {
-            let mut matched = false;
-            let mut error = None;
+    let factory = match state.registry.get(&manifest.wallpaper.r#type) {
+        Some(f) => f,
+        None => {
+            return Response::Error(format!(
+                "Unsupported wallpaper type: '{}'. No matching renderer factory registered.",
+                manifest.wallpaper.r#type
+            ));
+        }
+    };
 
-            let gpu = crate::output::GpuContext {
-                instance: &state.wgpu_instance,
-                adapter: &state.wgpu_adapter,
-                device: &state.wgpu_device,
-                queue: &state.wgpu_queue,
+    let caps = factory.capabilities(&manifest);
+    let audio_handle = if caps.needs_audio_spectrum {
+        state.ensure_audio_capture()
+    } else {
+        None
+    };
+
+    let mut matched = false;
+    let mut error = None;
+
+    let gpu = crate::output::GpuContext {
+        instance: &state.wgpu_instance,
+        adapter: &state.wgpu_adapter,
+        device: &state.wgpu_device,
+        queue: &state.wgpu_queue,
+    };
+
+    for out in state.outputs.values_mut() {
+        let matches = match output {
+            OutputSelector::All => true,
+            OutputSelector::Named(name) => out.name.as_deref() == Some(name.as_str()),
+            OutputSelector::Span(names) => out.name.as_ref().is_some_and(|n| names.contains(n)),
+        };
+
+        if matches {
+            matched = true;
+            let renderer = match factory.create_renderer(&manifest, base_dir) {
+                Ok(r) => r,
+                Err(e) => {
+                    error = Some(e.to_string());
+                    break;
+                }
             };
 
-            for out in state.outputs.values_mut() {
-                let matches = match output {
-                    OutputSelector::All => true,
-                    OutputSelector::Named(name) => out.name.as_deref() == Some(name.as_str()),
-                    OutputSelector::Span(names) => {
-                        out.name.as_ref().is_some_and(|n| names.contains(n))
-                    }
-                };
-
-                if matches {
-                    matched = true;
-                    let renderer = match wallrs_content_image::ImageRenderer::from_manifest(
-                        &manifest, base_dir,
-                    ) {
-                        Ok(r) => Box::new(r),
-                        Err(e) => {
-                            error = Some(e.to_string());
-                            break;
-                        }
-                    };
-
-                    if let Err(e) = out.set_renderer(
-                        renderer,
-                        &gpu,
-                        &state.qh,
-                        state.compositor_state.wl_compositor(),
-                    ) {
-                        error = Some(e.to_string());
-                        break;
-                    }
-                    out.current_wallpaper = Some(manifest_path.to_path_buf());
-                    out.audio.detach_spectrum();
-                    out.audio.load_background_track(
-                        manifest.audio.as_ref(),
-                        base_dir,
-                        state.allow_audio,
-                        out.renderer.as_deref_mut(),
-                    );
-                }
+            if let Err(e) = out.set_renderer(
+                renderer,
+                &gpu,
+                &state.qh,
+                state.compositor_state.wl_compositor(),
+            ) {
+                error = Some(e.to_string());
+                break;
             }
-            state.maybe_stop_audio_capture();
+            out.current_wallpaper = Some(manifest_path.to_path_buf());
 
-            if !matched {
-                Response::Error(format!("No matching output found for selector {output:?}"))
-            } else if let Some(err) = error {
-                Response::Error(err)
+            if caps.needs_audio_spectrum {
+                out.audio.attach_spectrum(audio_handle.clone());
             } else {
-                Response::Ok
+                out.audio.detach_spectrum();
+            }
+
+            if caps.produces_audio {
+                out.audio.clear();
+                out.audio
+                    .sync_renderer_audio(state.allow_audio, out.renderer.as_deref_mut());
+            } else {
+                out.audio.load_background_track(
+                    manifest.audio.as_ref(),
+                    base_dir,
+                    state.allow_audio,
+                    out.renderer.as_deref_mut(),
+                );
             }
         }
-        "shader" => {
-            let mut matched = false;
-            let mut error = None;
+    }
+    state.maybe_stop_audio_capture();
 
-            let audio_handle = state.ensure_audio_capture();
-
-            let gpu = crate::output::GpuContext {
-                instance: &state.wgpu_instance,
-                adapter: &state.wgpu_adapter,
-                device: &state.wgpu_device,
-                queue: &state.wgpu_queue,
-            };
-
-            for out in state.outputs.values_mut() {
-                let matches = match output {
-                    OutputSelector::All => true,
-                    OutputSelector::Named(name) => out.name.as_deref() == Some(name.as_str()),
-                    OutputSelector::Span(names) => {
-                        out.name.as_ref().is_some_and(|n| names.contains(n))
-                    }
-                };
-
-                if matches {
-                    matched = true;
-                    let renderer = match wallrs_content_shader::ShaderRenderer::from_manifest(
-                        &manifest, base_dir,
-                    ) {
-                        Ok(r) => Box::new(r),
-                        Err(e) => {
-                            error = Some(e.to_string());
-                            break;
-                        }
-                    };
-
-                    if let Err(e) = out.set_renderer(
-                        renderer,
-                        &gpu,
-                        &state.qh,
-                        state.compositor_state.wl_compositor(),
-                    ) {
-                        error = Some(e.to_string());
-                        break;
-                    }
-                    out.current_wallpaper = Some(manifest_path.to_path_buf());
-                    out.audio.attach_spectrum(audio_handle.clone());
-                    out.audio.load_background_track(
-                        manifest.audio.as_ref(),
-                        base_dir,
-                        state.allow_audio,
-                        out.renderer.as_deref_mut(),
-                    );
-                }
-            }
-
-            if !matched {
-                Response::Error(format!("No matching output found for selector {output:?}"))
-            } else if let Some(err) = error {
-                Response::Error(err)
-            } else {
-                Response::Ok
-            }
-        }
-        "video" => {
-            let mut matched = false;
-            let mut error = None;
-
-            let gpu = crate::output::GpuContext {
-                instance: &state.wgpu_instance,
-                adapter: &state.wgpu_adapter,
-                device: &state.wgpu_device,
-                queue: &state.wgpu_queue,
-            };
-
-            for out in state.outputs.values_mut() {
-                let matches = match output {
-                    OutputSelector::All => true,
-                    OutputSelector::Named(name) => out.name.as_deref() == Some(name.as_str()),
-                    OutputSelector::Span(names) => {
-                        out.name.as_ref().is_some_and(|n| names.contains(n))
-                    }
-                };
-
-                if matches {
-                    matched = true;
-                    let renderer = match wallrs_content_video::VideoRenderer::from_manifest(
-                        &manifest, base_dir,
-                    ) {
-                        Ok(r) => Box::new(r),
-                        Err(e) => {
-                            error = Some(e.to_string());
-                            break;
-                        }
-                    };
-
-                    if let Err(e) = out.set_renderer(
-                        renderer,
-                        &gpu,
-                        &state.qh,
-                        state.compositor_state.wl_compositor(),
-                    ) {
-                        error = Some(e.to_string());
-                        break;
-                    }
-                    out.current_wallpaper = Some(manifest_path.to_path_buf());
-                    out.audio.clear();
-                    out.audio
-                        .sync_renderer_audio(state.allow_audio, out.renderer.as_deref_mut());
-                }
-            }
-            state.maybe_stop_audio_capture();
-
-            if !matched {
-                Response::Error(format!("No matching output found for selector {output:?}"))
-            } else if let Some(err) = error {
-                Response::Error(err)
-            } else {
-                Response::Ok
-            }
-        }
-        other => Response::Error(format!("Unsupported wallpaper type: {other}")),
+    if !matched {
+        Response::Error(format!("No matching output found for selector {output:?}"))
+    } else if let Some(err) = error {
+        Response::Error(err)
+    } else {
+        Response::Ok
     }
 }
 
@@ -1019,12 +845,15 @@ mod tests {
 
         let aurora = manifest_dir.join("examples/aurora-shader");
         if aurora.exists() {
-            assert!(matches!(validate_wallpaper_manifest(&aurora), Response::Ok));
+            assert!(matches!(
+                validate_wallpaper_manifest(&aurora, None),
+                Response::Ok
+            ));
         }
 
         let nonexistent = manifest_dir.join("examples/nonexistent-xyz");
         assert!(matches!(
-            validate_wallpaper_manifest(&nonexistent),
+            validate_wallpaper_manifest(&nonexistent, None),
             Response::Error(_)
         ));
     }
