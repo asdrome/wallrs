@@ -62,6 +62,7 @@ enum Subcommands {
     ToggleMute(TargetOutputArgs),
 
     /// Load and display a wallpaper from a manifest folder or wallpaper.toml
+    #[command(alias = "set")]
     SetWallpaper(SetWallpaperArgs),
 
     /// Take a screenshot of the current wallpaper on an output and save it to an image file
@@ -730,6 +731,16 @@ mod tests {
         match cli.command {
             Subcommands::SetWallpaper(args) => {
                 assert!(args.unmute);
+                assert_eq!(args.output, None);
+                assert_eq!(args.path, PathBuf::from("examples/video-sunset"));
+            }
+            _ => panic!("Expected Subcommands::SetWallpaper"),
+        }
+
+        let cli_alias = Cli::try_parse_from(["wallctl", "set", "examples/video-sunset"]).unwrap();
+        match cli_alias.command {
+            Subcommands::SetWallpaper(args) => {
+                assert!(!args.unmute);
                 assert_eq!(args.output, None);
                 assert_eq!(args.path, PathBuf::from("examples/video-sunset"));
             }

@@ -673,8 +673,21 @@ impl WallpaperRenderer for VideoRenderer {
             return;
         };
 
-        // Non-blocking attempt to retrieve the latest video frame
-        if let Some(sample) = appsink.try_pull_sample(gst::ClockTime::ZERO)
+        // Retrieve the latest video frame (pull sample or preroll buffer if paused)
+        let pull_timeout = if self.texture_y.is_none() {
+            // First frame initialization or paused preroll: wait briefly (up to 500ms)
+            // for the decoder to produce the first frame so initial presentation
+            // and screenshot capture don't render a blank/black frame.
+            gst::ClockTime::from_mseconds(500)
+        } else {
+            gst::ClockTime::ZERO
+        };
+
+        let sample_opt = appsink
+            .try_pull_sample(pull_timeout)
+            .or_else(|| appsink.try_pull_preroll(pull_timeout));
+
+        if let Some(sample) = sample_opt
             && let (Some(buffer), Some(caps)) = (sample.buffer(), sample.caps())
         {
             let video_info = if let Some(info) = &self.cached_video_info
