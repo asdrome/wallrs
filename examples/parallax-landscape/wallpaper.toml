@@ -1,7 +1,7 @@
 [wallpaper]
 type = "image"
 name = "parallax-landscape"
-author = "Antonio S. Dromundo"
+author = "Asdrome Labs"
 description = "Multi-layer parallax landscape with continuous drifting clouds, dynamic day/night cycle, and celestial motion"
 
 [image]

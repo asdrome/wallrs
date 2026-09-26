@@ -131,7 +131,7 @@ Investigation with `file` and image viewers revealed that `wallctl preview` was 
 When a video wallpaper is loaded or paused, GStreamer's `playbin` pipeline transitions to `Paused` or `Playing`. The `appsink` element buffers frames asynchronously. If `wallctl preview` immediately executed `Command::Screenshot`, `try_pull_sample(ClockTime::ZERO)` returned `None` because the hardware decoder had not yet pushed the first frame. `VideoRenderer` fell back to its clear pass, rendering blank pixels.
 
 ### The Solution: Decoder Preroll Wait
-In [`crates/wallrs-content-video/src/lib.rs`](file:///home/asdromundo/Documentos/wallrs/crates/wallrs-content-video/src/lib.rs):
+In [`crates/wallrs-content-video/src/lib.rs`](../../crates/wallrs-content-video/src/lib.rs):
 ```rust
 let pull_timeout = if self.texture_y.is_none() {
     // First frame initialization or paused preroll: wait briefly (up to 500ms)
@@ -189,12 +189,12 @@ noctalia msg color-scheme-set wallpaper "$scheme"
 To ensure that rebooting or logging in with a previously saved wallpaper automatically restores the desktop theme:
 
 1. **State Re-Saving on Restore**:
-   When `wallrsd` boots with `--restore` (default), `try_restore_output_state` in [`crates/wallrs-core/src/engine.rs`](file:///home/asdromundo/Documentos/wallrs/crates/wallrs-core/src/engine.rs) loads the wallpaper and calls:
+   When `wallrsd` boots with `--restore` (default), `try_restore_output_state` in [`crates/wallrs-core/src/engine.rs`](../../crates/wallrs-core/src/engine.rs) loads the wallpaper and calls:
    ```rust
    let _ = crate::state::save_state(&self.state_path, &self.state_snapshot);
    ```
 2. **Systemd Path Trigger**:
-   [`wallrs-theme-sync.path`](file:///home/asdromundo/Documentos/wallrs/extra/systemd/wallrs-theme-sync.path) watches `~/.local/state/wallrs/state.json` via `PathChanged=`. The rewrite triggers `wallrs-theme-sync.service`.
+   [`wallrs-theme-sync.path`](../../extra/systemd/wallrs-theme-sync.path) watches `~/.local/state/wallrs/state.json` via `PathChanged=`. The rewrite triggers `wallrs-theme-sync.service`.
 3. **Retry Polling in `get_preview_path()`**:
    During daemon cold-boot, `wallctl preview` may be invoked before the WGPU surface configuration and video pipeline have completed their initial draw. `get_preview_path()` loops up to 15 times with 200ms sleep (3-second window) until a non-empty preview image exists on disk:
    ```bash

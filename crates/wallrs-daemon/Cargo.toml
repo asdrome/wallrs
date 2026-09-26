@@ -26,8 +26,8 @@ wallrs-render = { path = "../wallrs-render" }
 
 [package.metadata.deb]
 name = "wallrs"
-maintainer = "Antonio S. Dromundo <sebastiandromundo@outlook.com>"
-copyright = "2026, Antonio S. Dromundo"
+maintainer = "Asdrome Labs <dev@asdrome.com>"
+copyright = "2026, Asdrome Labs"
 license-file = ["../../LICENSE-MIT", "4"]
 depends = "$auto, libvulkan1, libpipewire-0.3-0, libgstreamer1.0-0, libgstreamer-plugins-base1.0-0, gstreamer1.0-plugins-good, libwayland-client0"
 section = "graphics"
