@@ -217,10 +217,10 @@ To ensure that rebooting or logging in with a previously saved wallpaper automat
 
 ## 8. Troubleshooting Reference for Future Maintenance
 
-| Symptom | Cause | Resolution |
-| :--- | :--- | :--- |
-| **Window borders revert to previous color after change** | Only `wallpaper-set` was called; Noctalia kept old in-memory palette | Ensure `noctalia msg color-scheme-set wallpaper <scheme>` is called immediately after `wallpaper-set`. |
-| **Palette generates deep cyan / dark blue on video wallpaper** | Video appsink returned empty sample before first frame decoded | Verify video preroll timeout in `VideoRenderer::update()` is active (at least 500ms). |
-| **Wallpaper is obscured or invisible under Noctalia** | Noctalia's built-in wallpaper layer is enabled | Verify `[wallpaper] enabled = false` in `~/.local/state/noctalia/settings.toml` and restart Noctalia. |
-| **`wallrs-theme-sync.service` does not run on startup** | State file was not updated on restore | Confirm `try_restore_output_state` calls `save_state` upon successful output configuration. |
-| **Niri borders do not update dynamically** | `~/.config/niri/config.kdl` is missing include | Ensure `include "noctalia.kdl"` is present in Niri configuration. |
+| Symptom                                                        | Cause                                                                | Resolution                                                                                             |
+| :------------------------------------------------------------- | :------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------- |
+| **Window borders revert to previous color after change**       | Only `wallpaper-set` was called; Noctalia kept old in-memory palette | Ensure `noctalia msg color-scheme-set wallpaper <scheme>` is called immediately after `wallpaper-set`. |
+| **Palette generates deep cyan / dark blue on video wallpaper** | Video appsink returned empty sample before first frame decoded       | Verify video preroll timeout in `VideoRenderer::update()` is active (at least 500ms).                  |
+| **Wallpaper is obscured or invisible under Noctalia**          | Noctalia's built-in wallpaper layer is enabled                       | Verify `[wallpaper] enabled = false` in `~/.local/state/noctalia/settings.toml` and restart Noctalia.  |
+| **`wallrs-theme-sync.service` does not run on startup**        | State file was not updated on restore                                | Confirm `try_restore_output_state` calls `save_state` upon successful output configuration.            |
+| **Niri borders do not update dynamically**                     | `~/.config/niri/config.kdl` is missing include                       | Ensure `include "noctalia.kdl"` is present in Niri configuration.                                      |
