@@ -1,13 +1,13 @@
 # Maintainer: Antonio S. Dromundo <sebastiandromundo@outlook.com>
 pkgname=wallrs
-pkgver=1.1.4
+pkgver=1.2.0
 pkgrel=1
 pkgdesc="High-performance, Wayland-native live wallpaper daemon and CLI client written in Rust"
 arch=('x86_64' 'aarch64')
 url="https://github.com/asdrome/wallrs"
 license=('MIT' 'Apache-2.0')
-depends=('vulkan-icd-loader' 'pipewire' 'mpv')
-makedepends=('cargo' 'pkgconf' 'wayland')
+depends=('vulkan-icd-loader' 'pipewire' 'gst-plugins-base' 'gst-plugins-good')
+makedepends=('cargo' 'pkgconf' 'wayland' 'gstreamer' 'libxkbcommon')
 optdepends=(
     'vulkan-radeon: Vulkan driver for AMD GPUs'
     'vulkan-intel: Vulkan driver for Intel GPUs'

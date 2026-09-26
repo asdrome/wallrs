@@ -1,8 +1,10 @@
+pub mod audio;
 pub mod engine;
 pub mod ipc;
 pub mod output;
 pub mod state;
 
+pub use audio::AudioController;
 pub use engine::{Engine, EngineError, EngineState};
 pub use ipc::{IpcError, bind_socket, register_ipc_source};
 pub use output::{OutputError, OutputSurface};
@@ -55,6 +57,7 @@ pub struct EngineConfig {
     pub restore_state: bool,
     pub state_path: Option<std::path::PathBuf>,
     pub layer: ShellLayer,
+    pub registry: wallrs_render::RendererRegistry,
 }
 
 impl Default for EngineConfig {
@@ -68,6 +71,7 @@ impl Default for EngineConfig {
             restore_state: true,
             state_path: None,
             layer: ShellLayer::Auto,
+            registry: wallrs_render::RendererRegistry::default(),
         }
     }
 }
@@ -86,6 +90,7 @@ mod tests {
         assert!(config.restore_state);
         assert!(config.state_path.is_none());
         assert_eq!(config.layer, ShellLayer::Auto);
+        assert!(config.registry.is_empty());
     }
 
     #[test]

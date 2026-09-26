@@ -8,7 +8,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use validate::validate_wallpaper;
+use validate::validate_wallpaper_with_socket;
 use wallrs_proto::{
     Command, OutputInfoProto, OutputSelector, PropertyValue, Response, default_socket_path,
 };
@@ -62,6 +62,7 @@ enum Subcommands {
     ToggleMute(TargetOutputArgs),
 
     /// Load and display a wallpaper from a manifest folder or wallpaper.toml
+    #[command(alias = "set")]
     SetWallpaper(SetWallpaperArgs),
 
     /// Take a screenshot of the current wallpaper on an output and save it to an image file
@@ -162,49 +163,9 @@ struct TargetOutputArgs {
     output: Option<String>,
 }
 
-/// Parses a hex color string (3, 4, 6, or 8 hex digits, optional leading '#') into RGBA f32 [0.0..1.0].
+/// Parses a hex or RGBA color string into RGBA f32 [0.0..1.0].
 pub fn parse_hex_color(s: &str) -> Result<[f32; 4], String> {
-    let clean = s.trim().trim_start_matches('#');
-    let (r, g, b, a) = match clean.len() {
-        3 => {
-            let r = u8::from_str_radix(&clean[0..1], 16).map_err(|e| e.to_string())? * 17;
-            let g = u8::from_str_radix(&clean[1..2], 16).map_err(|e| e.to_string())? * 17;
-            let b = u8::from_str_radix(&clean[2..3], 16).map_err(|e| e.to_string())? * 17;
-            (r, g, b, 255)
-        }
-        4 => {
-            let r = u8::from_str_radix(&clean[0..1], 16).map_err(|e| e.to_string())? * 17;
-            let g = u8::from_str_radix(&clean[1..2], 16).map_err(|e| e.to_string())? * 17;
-            let b = u8::from_str_radix(&clean[2..3], 16).map_err(|e| e.to_string())? * 17;
-            let a = u8::from_str_radix(&clean[3..4], 16).map_err(|e| e.to_string())? * 17;
-            (r, g, b, a)
-        }
-        6 => {
-            let r = u8::from_str_radix(&clean[0..2], 16).map_err(|e| e.to_string())?;
-            let g = u8::from_str_radix(&clean[2..4], 16).map_err(|e| e.to_string())?;
-            let b = u8::from_str_radix(&clean[4..6], 16).map_err(|e| e.to_string())?;
-            (r, g, b, 255)
-        }
-        8 => {
-            let r = u8::from_str_radix(&clean[0..2], 16).map_err(|e| e.to_string())?;
-            let g = u8::from_str_radix(&clean[2..4], 16).map_err(|e| e.to_string())?;
-            let b = u8::from_str_radix(&clean[4..6], 16).map_err(|e| e.to_string())?;
-            let a = u8::from_str_radix(&clean[6..8], 16).map_err(|e| e.to_string())?;
-            (r, g, b, a)
-        }
-        _ => {
-            return Err(format!(
-                "Invalid hex color '{s}': expected 3, 4, 6, or 8 hex digits"
-            ));
-        }
-    };
-
-    Ok([
-        r as f32 / 255.0,
-        g as f32 / 255.0,
-        b as f32 / 255.0,
-        a as f32 / 255.0,
-    ])
+    wallrs_proto::parse_color(s).map_err(|e| e.to_string())
 }
 
 /// Infers the `PropertyValue` type from a string representation.
@@ -446,7 +407,7 @@ fn handle_preview(socket_path: &Path, args: PreviewArgs) -> Result<(), String> {
 fn run() -> Result<(), String> {
     let cli = Cli::parse();
     if let Subcommands::Validate(args) = cli.command {
-        return validate_wallpaper(&args.path);
+        return validate_wallpaper_with_socket(&args.path, cli.socket.as_deref());
     }
     if let Subcommands::New(args) = cli.command {
         return handle_new_wallpaper(args);
@@ -456,9 +417,6 @@ fn run() -> Result<(), String> {
     if let Subcommands::Preview(args) = cli.command {
         return handle_preview(&socket_path, args);
     }
-
-    let mut unmute_after = false;
-    let mut unmute_selector = OutputSelector::All;
 
     let (cmd, expect_json) = match cli.command {
         Subcommands::ListOutputs(args) => (Command::ListOutputs, args.json),
@@ -510,34 +468,18 @@ fn run() -> Result<(), String> {
             },
             false,
         ),
-        Subcommands::Mute(args) => {
-            let selector = match args.output {
-                Some(name) => OutputSelector::Named(name),
-                None => OutputSelector::All,
-            };
-            (
-                Command::SetProperty {
-                    output: selector,
-                    key: "mute".into(),
-                    value: PropertyValue::Bool(true),
-                },
-                false,
-            )
-        }
-        Subcommands::Unmute(args) => {
-            let selector = match args.output {
-                Some(name) => OutputSelector::Named(name),
-                None => OutputSelector::All,
-            };
-            (
-                Command::SetProperty {
-                    output: selector,
-                    key: "mute".into(),
-                    value: PropertyValue::Bool(false),
-                },
-                false,
-            )
-        }
+        Subcommands::Mute(args) => (
+            Command::Mute {
+                output: args.output,
+            },
+            false,
+        ),
+        Subcommands::Unmute(args) => (
+            Command::Unmute {
+                output: args.output,
+            },
+            false,
+        ),
         Subcommands::ToggleMute(args) => (
             Command::ToggleMute {
                 output: args.output,
@@ -550,14 +492,11 @@ fn run() -> Result<(), String> {
                 Some(name) => OutputSelector::Named(name),
                 None => OutputSelector::All,
             };
-            if args.unmute {
-                unmute_after = true;
-                unmute_selector = selector.clone();
-            }
             (
                 Command::SetWallpaper {
                     output: selector,
                     manifest_path: canonical,
+                    unmute: args.unmute,
                 },
                 false,
             )
@@ -565,7 +504,7 @@ fn run() -> Result<(), String> {
         Subcommands::Screenshot(args) => (
             Command::Screenshot {
                 output: args.output,
-                path: args.path,
+                path: resolve_screenshot_path(args.path),
             },
             false,
         ),
@@ -577,17 +516,6 @@ fn run() -> Result<(), String> {
 
     match resp {
         Response::Ok => {
-            if unmute_after {
-                let unmute_cmd = Command::SetProperty {
-                    output: unmute_selector,
-                    key: "mute".into(),
-                    value: PropertyValue::Bool(false),
-                };
-                let resp2 = send_command(&socket_path, &unmute_cmd)?;
-                if let Response::Error(err) = resp2 {
-                    return Err(format!("Wallpaper loaded, but failed to unmute: {err}"));
-                }
-            }
             println!("OK");
             Ok(())
         }
@@ -602,6 +530,26 @@ fn run() -> Result<(), String> {
             Ok(())
         }
         Response::Error(err) => Err(format!("Daemon error: {err}")),
+    }
+}
+
+/// Resolves the destination path for a screenshot command.
+///
+/// Because `wallrsd` runs as a system daemon (often with working directory `$HOME` or `/`),
+/// relative paths passed to `wallctl` must be resolved relative to the user's current
+/// terminal working directory rather than the daemon's working directory.
+pub(crate) fn resolve_screenshot_path(path: PathBuf) -> PathBuf {
+    if let Ok(stripped) = path.strip_prefix("~")
+        && let Some(home) = std::env::var_os("HOME").map(PathBuf::from)
+    {
+        return home.join(stripped);
+    }
+    if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
     }
 }
 
@@ -714,6 +662,8 @@ mod tests {
 
     #[test]
     fn test_validate_sample_wallpapers() {
+        use crate::validate::validate_wallpaper;
+
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let workspace_root = manifest_dir.parent().unwrap().parent().unwrap();
 
@@ -724,6 +674,21 @@ mod tests {
 
         let non_existent = workspace_root.join("examples/non_existent_wallpaper_123");
         assert!(validate_wallpaper(&non_existent).is_err());
+
+        let temp_dir = std::env::temp_dir().join("wallrs_test_broken_shader");
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let toml_broken = temp_dir.join("wallpaper.toml");
+        let _ = std::fs::write(
+            &toml_broken,
+            "[wallpaper]\nname = \"broken\"\ntype = \"shader\"\n\n[shader]\nentry = \"broken.wgsl\"\n",
+        );
+        let wgsl_broken = temp_dir.join("broken.wgsl");
+        let _ = std::fs::write(
+            &wgsl_broken,
+            "@fragment fn fs_main() -> vec4<f32> { return vec4(1.0);",
+        );
+        assert!(validate_wallpaper(&temp_dir).is_err());
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
@@ -766,6 +731,16 @@ mod tests {
         match cli.command {
             Subcommands::SetWallpaper(args) => {
                 assert!(args.unmute);
+                assert_eq!(args.output, None);
+                assert_eq!(args.path, PathBuf::from("examples/video-sunset"));
+            }
+            _ => panic!("Expected Subcommands::SetWallpaper"),
+        }
+
+        let cli_alias = Cli::try_parse_from(["wallctl", "set", "examples/video-sunset"]).unwrap();
+        match cli_alias.command {
+            Subcommands::SetWallpaper(args) => {
+                assert!(!args.unmute);
                 assert_eq!(args.output, None);
                 assert_eq!(args.path, PathBuf::from("examples/video-sunset"));
             }
@@ -861,5 +836,21 @@ mod tests {
         } else {
             panic!("Expected color");
         }
+    }
+
+    #[test]
+    fn test_resolve_screenshot_path() {
+        let abs = PathBuf::from("/tmp/wallrs-screenshot.png");
+        assert_eq!(resolve_screenshot_path(abs.clone()), abs);
+
+        let rel = PathBuf::from("my_screen.png");
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        assert_eq!(resolve_screenshot_path(rel), cwd.join("my_screen.png"));
+
+        let nested = PathBuf::from("screenshots/output.webp");
+        assert_eq!(
+            resolve_screenshot_path(nested),
+            cwd.join("screenshots/output.webp")
+        );
     }
 }

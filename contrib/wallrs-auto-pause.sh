@@ -9,6 +9,7 @@
 # Supported Compositors:
 #   - KDE Plasma 6: Dispatches to kde-auto-pause.sh (via KWin 6 D-Bus scripting).
 #   - Hyprland:     Dispatches to hyprland-auto-pause.sh (via socket2 IPC).
+#   - Niri:         Dispatches to niri-auto-pause.sh (via Niri IPC event stream).
 #   - Sway/wlroots: Fullscreen pause is already handled natively by wallrsd via
 #                   zwlr_foreign_toplevel_manager_v1.
 # ==============================================================================
@@ -30,6 +31,16 @@ fi
 # 2. Detect Desktop Environment
 DESKTOP="${XDG_CURRENT_DESKTOP:-${DESKTOP_SESSION:-}}"
 
+if [[ -z "${DESKTOP:-}" || "${DESKTOP}" == "unknown" ]]; then
+    if [[ -n "${NIRI_SOCKET:-}" ]]; then
+        DESKTOP="niri"
+    elif [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
+        DESKTOP="Hyprland"
+    elif [[ -n "${SWAYSOCK:-}" ]]; then
+        DESKTOP="sway"
+    fi
+fi
+
 case "$DESKTOP" in
     *KDE*|*Plasma*)
         if [[ -x "$CONTRIB_DIR/kde-auto-pause.sh" ]]; then
@@ -47,6 +58,16 @@ case "$DESKTOP" in
         else
             echo "wallrs-auto-pause: hyprland-auto-pause.sh not found in $CONTRIB_DIR" >&2
             exit 1
+        fi
+        ;;
+    *niri*|*Niri*)
+        if [[ -x "$CONTRIB_DIR/niri-auto-pause.sh" ]] && command -v niri >/dev/null 2>&1; then
+            echo "[wallrs-auto-pause] Niri detected; launching Niri IPC auto-pause driver..."
+            exec "$CONTRIB_DIR/niri-auto-pause.sh" "$@"
+        else
+            echo "[wallrs-auto-pause] Niri detected."
+            echo "[wallrs-auto-pause] Fullscreen auto-pause is natively handled by wallrsd via zwlr_foreign_toplevel_manager_v1."
+            exec sleep infinity
         fi
         ;;
     *sway*|*Sway*|*wlroots*|*labwc*|*river*)

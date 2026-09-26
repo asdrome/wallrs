@@ -21,6 +21,7 @@ wallrs-content-image = { path = "../wallrs-content-image" }
 wallrs-content-shader = { path = "../wallrs-content-shader" }
 wallrs-content-video = { path = "../wallrs-content-video" }
 wallrs-core = { path = "../wallrs-core" }
+wallrs-proto = { path = "../wallrs-proto" }
 wallrs-render = { path = "../wallrs-render" }
 
 [package.metadata.deb]
@@ -28,12 +29,12 @@ name = "wallrs"
 maintainer = "Antonio S. Dromundo <sebastiandromundo@outlook.com>"
 copyright = "2026, Antonio S. Dromundo"
 license-file = ["../../LICENSE-MIT", "4"]
-depends = "$auto, libvulkan1, libpipewire-0.3-0, libmpv2 | libmpv1, libwayland-client0"
+depends = "$auto, libvulkan1, libpipewire-0.3-0, libgstreamer1.0-0, libgstreamer-plugins-base1.0-0, gstreamer1.0-plugins-good, libwayland-client0"
 section = "graphics"
 priority = "optional"
 extended-description = """\
 High-performance Wayland-native live wallpaper daemon and CLI controller \
-written in pure Rust with wgpu/Vulkan, PipeWire, and libmpv2."""
+written in pure Rust with wgpu/Vulkan, PipeWire, and GStreamer."""
 assets = [
     [
         "target/release/wallrsd",
@@ -93,6 +94,11 @@ assets = [
     [
         "../../contrib/hyprland-auto-pause.sh",
         "usr/share/wallrs/contrib/hyprland-auto-pause.sh",
+        "755",
+    ],
+    [
+        "../../contrib/niri-auto-pause.sh",
+        "usr/share/wallrs/contrib/niri-auto-pause.sh",
         "755",
     ],
     [

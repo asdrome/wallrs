@@ -5,7 +5,6 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 use wallrs_proto::{Command, OutputInfoProto, OutputSelector, PropertyValue, Response};
-use wallrs_render::WallpaperRenderer;
 
 use crate::engine::EngineState;
 
@@ -114,7 +113,7 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                     width: out.width,
                     height: out.height,
                     paused: out.is_paused(),
-                    muted: out.audio_muted,
+                    muted: out.audio.is_muted(),
                     wallpaper: out.current_wallpaper.clone(),
                 })
                 .collect();
@@ -156,8 +155,7 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                             break;
                         }
                         out.current_wallpaper = None;
-                        out.audio_track = None;
-                        out.audio_handle = None;
+                        out.audio.clear();
                         continue;
                     }
 
@@ -248,6 +246,60 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
             }
         },
 
+        Command::Mute { output } => match output {
+            Some(name) => {
+                let mut matched = false;
+                for out in state.outputs.values_mut() {
+                    if out.name.as_deref() == Some(name.as_str()) {
+                        matched = true;
+                        out.set_muted(true);
+                        state.record_mute_change(&OutputSelector::Named(name.clone()), true);
+                        tracing::info!(output = %name, "Muted output");
+                        break;
+                    }
+                }
+                if !matched {
+                    Response::Error(format!("No matching output found for '{name}'"))
+                } else {
+                    Response::Ok
+                }
+            }
+            None => {
+                for out in state.outputs.values_mut() {
+                    out.set_muted(true);
+                }
+                state.record_mute_change(&OutputSelector::All, true);
+                Response::Ok
+            }
+        },
+
+        Command::Unmute { output } => match output {
+            Some(name) => {
+                let mut matched = false;
+                for out in state.outputs.values_mut() {
+                    if out.name.as_deref() == Some(name.as_str()) {
+                        matched = true;
+                        out.set_muted(false);
+                        state.record_mute_change(&OutputSelector::Named(name.clone()), false);
+                        tracing::info!(output = %name, "Unmuted output");
+                        break;
+                    }
+                }
+                if !matched {
+                    Response::Error(format!("No matching output found for '{name}'"))
+                } else {
+                    Response::Ok
+                }
+            }
+            None => {
+                for out in state.outputs.values_mut() {
+                    out.set_muted(false);
+                }
+                state.record_mute_change(&OutputSelector::All, false);
+                Response::Ok
+            }
+        },
+
         Command::ToggleMute { output } => match output {
             Some(name) => {
                 let mut matched = false;
@@ -270,7 +322,7 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                 if state.outputs.is_empty() {
                     Response::Ok
                 } else {
-                    let any_unmuted = state.outputs.values().any(|o| !o.audio_muted);
+                    let any_unmuted = state.outputs.values().any(|o| !o.audio.is_muted());
                     let target_muted = any_unmuted;
                     for out in state.outputs.values_mut() {
                         out.set_muted(target_muted);
@@ -290,10 +342,28 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
         Command::SetWallpaper {
             output,
             manifest_path,
+            unmute,
         } => {
             let resp = apply_wallpaper(state, &output, &manifest_path);
             if let Response::Ok = &resp {
                 state.record_set_wallpaper(&output, &manifest_path);
+                if unmute {
+                    for out in state.outputs.values_mut() {
+                        let matches = match &output {
+                            OutputSelector::All => true,
+                            OutputSelector::Named(name) => {
+                                out.name.as_deref() == Some(name.as_str())
+                            }
+                            OutputSelector::Span(names) => {
+                                out.name.as_ref().is_some_and(|n| names.contains(n))
+                            }
+                        };
+                        if matches {
+                            out.set_muted(false);
+                        }
+                    }
+                    state.record_mute_change(&output, false);
+                }
             }
             resp
         }
@@ -366,7 +436,7 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                 .map_or(std::time::Duration::from_millis(16), |l| {
                     now.duration_since(l)
                 });
-            let spectrum_arc = out.audio_handle.as_ref().map(|h| h.latest());
+            let spectrum_arc = out.audio.spectrum();
             let spectrum = spectrum_arc.as_deref().map(|v| v.as_slice());
 
             let ctx = wallrs_render::FrameContext {
@@ -495,7 +565,76 @@ fn execute_command(cmd: Command, state: &mut EngineState) -> Response {
                 Err(_) => Response::Error("Channel disconnected while mapping buffer".into()),
             }
         }
+
+        Command::ValidateWallpaper { manifest_path } => {
+            validate_wallpaper_manifest(&manifest_path, Some(&state.registry))
+        }
     }
+}
+
+/// Fully validates a wallpaper manifest, its assets, and type-specific rules via registered factories.
+pub fn validate_wallpaper_manifest(
+    manifest_path: &Path,
+    registry: Option<&wallrs_render::RendererRegistry>,
+) -> Response {
+    let manifest_file = if manifest_path.is_dir() {
+        manifest_path.join("wallpaper.toml")
+    } else {
+        manifest_path.to_path_buf()
+    };
+
+    if !manifest_file.exists() {
+        return Response::Error(format!("Manifest path does not exist: {manifest_file:?}"));
+    }
+
+    let manifest = match wallrs_proto::WallpaperManifest::from_file(&manifest_file) {
+        Ok(m) => m,
+        Err(e) => return Response::Error(format!("Syntax error in wallpaper.toml: {e}")),
+    };
+
+    let base_dir = manifest_file.parent().unwrap_or_else(|| Path::new("."));
+
+    if let Some(audio) = &manifest.audio {
+        let audio_file = if audio.path.is_absolute() {
+            audio.path.clone()
+        } else {
+            base_dir.join(&audio.path)
+        };
+        if !audio_file.exists() {
+            return Response::Error(format!(
+                "Background audio track file does not exist: {audio_file:?}"
+            ));
+        }
+    }
+
+    if let Some(thumb) = &manifest.wallpaper.thumbnail {
+        let thumb_file = if thumb.is_absolute() {
+            thumb.clone()
+        } else {
+            base_dir.join(thumb)
+        };
+        if !thumb_file.exists() {
+            return Response::Error(format!("Thumbnail file does not exist: {thumb_file:?}"));
+        }
+    }
+
+    if let Some(reg) = registry {
+        match reg.get(&manifest.wallpaper.r#type) {
+            Some(factory) => {
+                if let Err(e) = factory.validate(&manifest, base_dir) {
+                    return Response::Error(format!("Validation error: {e}"));
+                }
+            }
+            None => {
+                return Response::Error(format!(
+                    "Unsupported wallpaper type: '{}'. No matching renderer factory registered.",
+                    manifest.wallpaper.r#type
+                ));
+            }
+        }
+    }
+
+    Response::Ok
 }
 
 /// Applies a wallpaper from a manifest file or directory to the matching outputs.
@@ -521,251 +660,89 @@ pub fn apply_wallpaper(
 
     let base_dir = manifest_file.parent().unwrap_or_else(|| Path::new("."));
 
-    match manifest.wallpaper.r#type.as_str() {
-        "image" => {
-            let mut matched = false;
-            let mut error = None;
+    let factory = match state.registry.get(&manifest.wallpaper.r#type) {
+        Some(f) => f,
+        None => {
+            return Response::Error(format!(
+                "Unsupported wallpaper type: '{}'. No matching renderer factory registered.",
+                manifest.wallpaper.r#type
+            ));
+        }
+    };
 
-            let gpu = crate::output::GpuContext {
-                instance: &state.wgpu_instance,
-                adapter: &state.wgpu_adapter,
-                device: &state.wgpu_device,
-                queue: &state.wgpu_queue,
+    let caps = factory.capabilities(&manifest);
+    let audio_handle = if caps.needs_audio_spectrum {
+        state.ensure_audio_capture()
+    } else {
+        None
+    };
+
+    let mut matched = false;
+    let mut error = None;
+
+    let gpu = crate::output::GpuContext {
+        instance: &state.wgpu_instance,
+        adapter: &state.wgpu_adapter,
+        device: &state.wgpu_device,
+        queue: &state.wgpu_queue,
+    };
+
+    for out in state.outputs.values_mut() {
+        let matches = match output {
+            OutputSelector::All => true,
+            OutputSelector::Named(name) => out.name.as_deref() == Some(name.as_str()),
+            OutputSelector::Span(names) => out.name.as_ref().is_some_and(|n| names.contains(n)),
+        };
+
+        if matches {
+            matched = true;
+            let renderer = match factory.create_renderer(&manifest, base_dir) {
+                Ok(r) => r,
+                Err(e) => {
+                    error = Some(e.to_string());
+                    break;
+                }
             };
 
-            for out in state.outputs.values_mut() {
-                let matches = match output {
-                    OutputSelector::All => true,
-                    OutputSelector::Named(name) => out.name.as_deref() == Some(name.as_str()),
-                    OutputSelector::Span(names) => {
-                        out.name.as_ref().is_some_and(|n| names.contains(n))
-                    }
-                };
-
-                if matches {
-                    matched = true;
-                    let renderer = match wallrs_content_image::ImageRenderer::from_manifest(
-                        &manifest, base_dir,
-                    ) {
-                        Ok(r) => Box::new(r),
-                        Err(e) => {
-                            error = Some(e.to_string());
-                            break;
-                        }
-                    };
-
-                    if let Err(e) = out.set_renderer(
-                        renderer,
-                        &gpu,
-                        &state.qh,
-                        state.compositor_state.wl_compositor(),
-                    ) {
-                        error = Some(e.to_string());
-                        break;
-                    }
-                    out.current_wallpaper = Some(manifest_path.to_path_buf());
-                    out.audio_handle = None;
-
-                    if let Some(audio_cfg) = &manifest.audio {
-                        match wallrs_audio::BackgroundAudioPlayer::from_config(audio_cfg, base_dir)
-                        {
-                            Ok(mut player) => {
-                                if out.is_paused() {
-                                    player.set_paused(true);
-                                }
-                                if state.allow_audio {
-                                    let _ = player.set_property(
-                                        "mute",
-                                        wallrs_proto::PropertyValue::Bool(false),
-                                    );
-                                    out.audio_muted = false;
-                                } else {
-                                    let _ = player.set_property(
-                                        "mute",
-                                        wallrs_proto::PropertyValue::Bool(true),
-                                    );
-                                    out.audio_muted = true;
-                                }
-                                out.audio_track = Some(player);
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    error = ?e,
-                                    "Failed to load background audio track for image wallpaper"
-                                );
-                            }
-                        }
-                    } else {
-                        out.audio_track = None;
-                    }
-                }
+            if let Err(e) = out.set_renderer(
+                renderer,
+                &gpu,
+                &state.qh,
+                state.compositor_state.wl_compositor(),
+            ) {
+                error = Some(e.to_string());
+                break;
             }
-            state.maybe_stop_audio_capture();
+            out.current_wallpaper = Some(manifest_path.to_path_buf());
 
-            if !matched {
-                Response::Error(format!("No matching output found for selector {output:?}"))
-            } else if let Some(err) = error {
-                Response::Error(err)
+            if caps.needs_audio_spectrum {
+                out.audio.attach_spectrum(audio_handle.clone());
             } else {
-                Response::Ok
+                out.audio.detach_spectrum();
+            }
+
+            if caps.produces_audio {
+                out.audio.clear();
+                out.audio
+                    .sync_renderer_audio(state.allow_audio, out.renderer.as_deref_mut());
+            } else {
+                out.audio.load_background_track(
+                    manifest.audio.as_ref(),
+                    base_dir,
+                    state.allow_audio,
+                    out.renderer.as_deref_mut(),
+                );
             }
         }
-        "shader" => {
-            let mut matched = false;
-            let mut error = None;
+    }
+    state.maybe_stop_audio_capture();
 
-            let audio_handle = state.ensure_audio_capture();
-
-            let gpu = crate::output::GpuContext {
-                instance: &state.wgpu_instance,
-                adapter: &state.wgpu_adapter,
-                device: &state.wgpu_device,
-                queue: &state.wgpu_queue,
-            };
-
-            for out in state.outputs.values_mut() {
-                let matches = match output {
-                    OutputSelector::All => true,
-                    OutputSelector::Named(name) => out.name.as_deref() == Some(name.as_str()),
-                    OutputSelector::Span(names) => {
-                        out.name.as_ref().is_some_and(|n| names.contains(n))
-                    }
-                };
-
-                if matches {
-                    matched = true;
-                    let renderer = match wallrs_content_shader::ShaderRenderer::from_manifest(
-                        &manifest, base_dir,
-                    ) {
-                        Ok(r) => Box::new(r),
-                        Err(e) => {
-                            error = Some(e.to_string());
-                            break;
-                        }
-                    };
-
-                    if let Err(e) = out.set_renderer(
-                        renderer,
-                        &gpu,
-                        &state.qh,
-                        state.compositor_state.wl_compositor(),
-                    ) {
-                        error = Some(e.to_string());
-                        break;
-                    }
-                    out.current_wallpaper = Some(manifest_path.to_path_buf());
-                    out.audio_handle = audio_handle.clone();
-
-                    if let Some(audio_cfg) = &manifest.audio {
-                        match wallrs_audio::BackgroundAudioPlayer::from_config(audio_cfg, base_dir)
-                        {
-                            Ok(mut player) => {
-                                if out.is_paused() {
-                                    player.set_paused(true);
-                                }
-                                if state.allow_audio {
-                                    let _ = player.set_property(
-                                        "mute",
-                                        wallrs_proto::PropertyValue::Bool(false),
-                                    );
-                                    out.audio_muted = false;
-                                } else {
-                                    let _ = player.set_property(
-                                        "mute",
-                                        wallrs_proto::PropertyValue::Bool(true),
-                                    );
-                                    out.audio_muted = true;
-                                }
-                                out.audio_track = Some(player);
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    error = ?e,
-                                    "Failed to load background audio track for shader wallpaper"
-                                );
-                            }
-                        }
-                    } else {
-                        out.audio_track = None;
-                    }
-                }
-            }
-
-            if !matched {
-                Response::Error(format!("No matching output found for selector {output:?}"))
-            } else if let Some(err) = error {
-                Response::Error(err)
-            } else {
-                Response::Ok
-            }
-        }
-        "video" => {
-            let mut matched = false;
-            let mut error = None;
-
-            let gpu = crate::output::GpuContext {
-                instance: &state.wgpu_instance,
-                adapter: &state.wgpu_adapter,
-                device: &state.wgpu_device,
-                queue: &state.wgpu_queue,
-            };
-
-            for out in state.outputs.values_mut() {
-                let matches = match output {
-                    OutputSelector::All => true,
-                    OutputSelector::Named(name) => out.name.as_deref() == Some(name.as_str()),
-                    OutputSelector::Span(names) => {
-                        out.name.as_ref().is_some_and(|n| names.contains(n))
-                    }
-                };
-
-                if matches {
-                    matched = true;
-                    let mut renderer = match wallrs_content_video::VideoRenderer::from_manifest(
-                        &manifest, base_dir,
-                    ) {
-                        Ok(r) => Box::new(r),
-                        Err(e) => {
-                            error = Some(e.to_string());
-                            break;
-                        }
-                    };
-
-                    if state.allow_audio {
-                        let _ =
-                            renderer.set_property("mute", wallrs_proto::PropertyValue::Bool(false));
-                        out.audio_muted = false;
-                    } else {
-                        let _ =
-                            renderer.set_property("mute", wallrs_proto::PropertyValue::Bool(true));
-                        out.audio_muted = true;
-                    }
-
-                    if let Err(e) = out.set_renderer(
-                        renderer,
-                        &gpu,
-                        &state.qh,
-                        state.compositor_state.wl_compositor(),
-                    ) {
-                        error = Some(e.to_string());
-                        break;
-                    }
-                    out.current_wallpaper = Some(manifest_path.to_path_buf());
-                    out.audio_track = None;
-                    out.audio_handle = None;
-                }
-            }
-            state.maybe_stop_audio_capture();
-
-            if !matched {
-                Response::Error(format!("No matching output found for selector {output:?}"))
-            } else if let Some(err) = error {
-                Response::Error(err)
-            } else {
-                Response::Ok
-            }
-        }
-        other => Response::Error(format!("Unsupported wallpaper type: {other}")),
+    if !matched {
+        Response::Error(format!("No matching output found for selector {output:?}"))
+    } else if let Some(err) = error {
+        Response::Error(err)
+    } else {
+        Response::Ok
     }
 }
 
@@ -824,5 +801,60 @@ mod tests {
         }
         // After swap: Red=50, Green=100, Blue=200, Alpha=255
         assert_eq!(buffer, vec![50, 100, 200, 255, 30, 20, 10, 255]);
+    }
+
+    #[test]
+    fn test_ipc_mute_unmute_commands() {
+        let mute = Command::Mute {
+            output: Some("eDP-1".into()),
+        };
+        let json = serde_json::to_string(&mute).unwrap();
+        let parsed: Command = serde_json::from_str(&json).unwrap();
+        assert_eq!(mute, parsed);
+
+        let unmute = Command::Unmute { output: None };
+        let json = serde_json::to_string(&unmute).unwrap();
+        let parsed: Command = serde_json::from_str(&json).unwrap();
+        assert_eq!(unmute, parsed);
+
+        let set_cmd = Command::SetWallpaper {
+            output: OutputSelector::All,
+            manifest_path: PathBuf::from("examples/aurora-shader/wallpaper.toml"),
+            unmute: true,
+        };
+        let json = serde_json::to_string(&set_cmd).unwrap();
+        let parsed: Command = serde_json::from_str(&json).unwrap();
+        assert_eq!(set_cmd, parsed);
+
+        let validate_cmd = Command::ValidateWallpaper {
+            manifest_path: PathBuf::from("examples/aurora-shader/wallpaper.toml"),
+        };
+        let json = serde_json::to_string(&validate_cmd).unwrap();
+        let parsed: Command = serde_json::from_str(&json).unwrap();
+        assert_eq!(validate_cmd, parsed);
+    }
+
+    #[test]
+    fn test_validate_wallpaper_manifest_samples() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+
+        let aurora = manifest_dir.join("examples/aurora-shader");
+        if aurora.exists() {
+            assert!(matches!(
+                validate_wallpaper_manifest(&aurora, None),
+                Response::Ok
+            ));
+        }
+
+        let nonexistent = manifest_dir.join("examples/nonexistent-xyz");
+        assert!(matches!(
+            validate_wallpaper_manifest(&nonexistent, None),
+            Response::Error(_)
+        ));
     }
 }

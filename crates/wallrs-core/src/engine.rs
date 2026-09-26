@@ -113,16 +113,27 @@ pub struct EngineState {
     pub state_snapshot: crate::state::StateSnapshot,
     pub state_path: PathBuf,
     pub restore_state: bool,
+    pub registry: wallrs_render::RendererRegistry,
 }
 
 impl CompositorHandler for EngineState {
     fn scale_factor_changed(
         &mut self,
         _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _surface: &wl_surface::WlSurface,
-        _new_factor: i32,
+        qh: &QueueHandle<Self>,
+        surface: &wl_surface::WlSurface,
+        new_factor: i32,
     ) {
+        let surface_id = surface.id();
+        if let Some(out) = self.outputs.get_mut(&surface_id) {
+            let gpu = crate::output::GpuContext {
+                instance: &self.wgpu_instance,
+                adapter: &self.wgpu_adapter,
+                device: &self.wgpu_device,
+                queue: &self.wgpu_queue,
+            };
+            out.set_scale_factor(new_factor, &gpu, qh);
+        }
     }
 
     fn transform_changed(
@@ -176,8 +187,14 @@ impl OutputHandler for EngineState {
         qh: &QueueHandle<Self>,
         output: wl_output::WlOutput,
     ) {
-        let name = self.output_state.info(&output).and_then(|info| info.name);
-        tracing::info!(output = ?name, "New output detected; creating background layer surface");
+        let info = self.output_state.info(&output);
+        let name = info.as_ref().and_then(|info| info.name.clone());
+        let scale_factor = info
+            .as_ref()
+            .map(|info| info.scale_factor)
+            .unwrap_or(1)
+            .max(1);
+        tracing::info!(output = ?name, scale_factor = scale_factor, "New output detected; creating background layer surface");
 
         let surface = self.compositor_state.create_surface(qh);
         let layer_surface = self.layer_shell.create_layer_surface(
@@ -202,7 +219,10 @@ impl OutputHandler for EngineState {
 
         let surface_id = layer_surface.wl_surface().id();
         let mut output_surface = OutputSurface::new(name, output, layer_surface, self.max_fps);
-        output_surface.audio_handle = self.audio_handle.clone();
+        output_surface.scale_factor = scale_factor;
+        output_surface
+            .audio
+            .attach_spectrum(self.audio_handle.clone());
         self.outputs.insert(surface_id, output_surface);
         if self.fullscreen_pause {
             self.update_fullscreen_pause();
@@ -212,15 +232,28 @@ impl OutputHandler for EngineState {
     fn update_output(
         &mut self,
         _conn: &Connection,
-        _qh: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
         output: wl_output::WlOutput,
     ) {
-        let name = self.output_state.info(&output).and_then(|info| info.name);
+        let info = self.output_state.info(&output);
+        let name = info.as_ref().and_then(|info| info.name.clone());
+        let scale_factor = info
+            .as_ref()
+            .map(|info| info.scale_factor)
+            .unwrap_or(1)
+            .max(1);
         let mut to_restore = None;
         for (id, out) in self.outputs.iter_mut() {
             if out.wl_output == output {
                 let had_no_name = out.name.is_none();
                 out.name = name.clone();
+                let gpu = crate::output::GpuContext {
+                    instance: &self.wgpu_instance,
+                    adapter: &self.wgpu_adapter,
+                    device: &self.wgpu_device,
+                    queue: &self.wgpu_queue,
+                };
+                out.set_scale_factor(scale_factor, &gpu, qh);
                 if had_no_name && out.configured && name.is_some() {
                     to_restore = Some(id.clone());
                 }
@@ -374,12 +407,13 @@ impl PointerHandler for EngineState {
             if let PointerEventKind::Motion { .. } | PointerEventKind::Enter { .. } = event.kind {
                 let surface_id = event.surface.id();
                 if let Some(out) = self.outputs.get_mut(&surface_id)
-                    && out.width > 0
-                    && out.height > 0
+                    && out.logical_width > 0
+                    && out.logical_height > 0
                 {
-                    let norm_x =
-                        ((event.position.0 as f32 / out.width as f32) * 2.0 - 1.0).clamp(-1.0, 1.0);
-                    let norm_y = ((event.position.1 as f32 / out.height as f32) * 2.0 - 1.0)
+                    let norm_x = ((event.position.0 as f32 / out.logical_width as f32) * 2.0 - 1.0)
+                        .clamp(-1.0, 1.0);
+                    let norm_y = ((event.position.1 as f32 / out.logical_height as f32) * 2.0
+                        - 1.0)
                         .clamp(-1.0, 1.0);
                     let new_pos = Some((norm_x, norm_y));
                     if out.cursor_position != new_pos {
@@ -624,7 +658,7 @@ impl EngineState {
 
     /// Stops PipeWire audio capture if no outputs currently have an active audio handle.
     pub fn maybe_stop_audio_capture(&mut self) {
-        let any_audio = self.outputs.values().any(|out| out.audio_handle.is_some());
+        let any_audio = self.outputs.values().any(|out| out.audio.has_spectrum());
         if !any_audio && self.audio_capture.is_some() {
             tracing::info!("No active audio-reactive outputs; stopping PipeWire audio capture");
             if let Some(mut capture) = self.audio_capture.take() {
@@ -658,7 +692,7 @@ impl EngineState {
                     name.clone(),
                     crate::state::SavedOutputConfig::Wallpaper {
                         path: wallpaper_dir.clone(),
-                        muted: out.audio_muted,
+                        muted: out.audio.is_muted(),
                         properties: HashMap::new(),
                     },
                 );
@@ -776,6 +810,10 @@ impl EngineState {
                     for (k, v) in properties {
                         let _ = out.set_property(&k, v, &self.qh);
                     }
+                    // Re-save state file on restore so watchers (such as
+                    // wallrs-theme-sync.path or custom inotify monitors)
+                    // detect the wallpaper activation on startup and synchronize desktop themes.
+                    let _ = crate::state::save_state(&self.state_path, &self.state_snapshot);
                 }
             }
             crate::state::SavedOutputConfig::Color { color } => {
@@ -799,8 +837,7 @@ impl EngineState {
                         self.compositor_state.wl_compositor(),
                     );
                     out.current_wallpaper = None;
-                    out.audio_track = None;
-                    out.audio_handle = None;
+                    out.audio.clear();
                 }
             }
         }
@@ -809,10 +846,10 @@ impl EngineState {
 
 /// Main engine runner orchestrating Wayland, Calloop, WGPU, and IPC socket server.
 pub struct Engine {
-    pub conn: Connection,
-    pub event_loop: calloop::EventLoop<'static, EngineState>,
-    pub state: EngineState,
     pub socket_path: PathBuf,
+    pub state: EngineState,
+    pub event_loop: calloop::EventLoop<'static, EngineState>,
+    pub conn: Connection,
 }
 
 impl Engine {
@@ -998,13 +1035,14 @@ impl Engine {
             state_snapshot,
             state_path,
             restore_state,
+            registry: config.registry,
         };
 
         Ok(Self {
-            conn,
-            event_loop,
-            state,
             socket_path,
+            state,
+            event_loop,
+            conn,
         })
     }
 
@@ -1045,5 +1083,26 @@ impl Drop for Engine {
             let _ = std::fs::remove_file(&self.socket_path);
             tracing::info!(socket = ?self.socket_path, "Cleaned up IPC socket");
         }
+
+        // Wait for any pending GPU submissions to finish before tearing down surfaces
+        let _ = self
+            .state
+            .wgpu_device
+            .poll(wgpu::PollType::wait_indefinitely());
+
+        // Explicitly tear down all outputs (renderers, wgpu surfaces, and layer surfaces)
+        // while wgpu_device, wgpu_instance, and Wayland connection are still alive and valid.
+        for out in self.state.outputs.values_mut() {
+            out.teardown();
+        }
+        self.state.outputs.clear();
+        self.state.pointers.clear();
+        self.state.cursor_shape_devices.clear();
+        self.state.cursor_shape_mgr = None;
+        self.state.toplevels.clear();
+        self.state.toplevel_manager = None;
+        self.state.audio_capture = None;
+
+        let _ = self.conn.flush();
     }
 }

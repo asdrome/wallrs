@@ -1,6 +1,9 @@
 use clap::Parser;
+use wallrs_content_image::ImageRendererFactory;
+use wallrs_content_shader::ShaderRendererFactory;
+use wallrs_content_video::VideoRendererFactory;
 use wallrs_core::{Engine, EngineError};
-use wallrs_render::SolidColorRenderer;
+use wallrs_render::{RendererRegistry, SolidColorRenderer};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -48,63 +51,7 @@ struct Args {
 }
 
 fn parse_color(s: &str) -> Result<[f32; 4], String> {
-    let s = s.trim();
-    if let Some(hex) = s.strip_prefix('#').or(Some(s)) {
-        if hex.len() == 3 {
-            let r = u8::from_str_radix(&hex[0..1], 16).map_err(|e| e.to_string())? * 17;
-            let g = u8::from_str_radix(&hex[1..2], 16).map_err(|e| e.to_string())? * 17;
-            let b = u8::from_str_radix(&hex[2..3], 16).map_err(|e| e.to_string())? * 17;
-            return Ok([r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]);
-        } else if hex.len() == 4 {
-            let r = u8::from_str_radix(&hex[0..1], 16).map_err(|e| e.to_string())? * 17;
-            let g = u8::from_str_radix(&hex[1..2], 16).map_err(|e| e.to_string())? * 17;
-            let b = u8::from_str_radix(&hex[2..3], 16).map_err(|e| e.to_string())? * 17;
-            let a = u8::from_str_radix(&hex[3..4], 16).map_err(|e| e.to_string())? * 17;
-            return Ok([
-                r as f32 / 255.0,
-                g as f32 / 255.0,
-                b as f32 / 255.0,
-                a as f32 / 255.0,
-            ]);
-        } else if hex.len() == 6 {
-            let r = u8::from_str_radix(&hex[0..2], 16).map_err(|e| e.to_string())? as f32 / 255.0;
-            let g = u8::from_str_radix(&hex[2..4], 16).map_err(|e| e.to_string())? as f32 / 255.0;
-            let b = u8::from_str_radix(&hex[4..6], 16).map_err(|e| e.to_string())? as f32 / 255.0;
-            return Ok([r, g, b, 1.0]);
-        } else if hex.len() == 8 {
-            let r = u8::from_str_radix(&hex[0..2], 16).map_err(|e| e.to_string())? as f32 / 255.0;
-            let g = u8::from_str_radix(&hex[2..4], 16).map_err(|e| e.to_string())? as f32 / 255.0;
-            let b = u8::from_str_radix(&hex[4..6], 16).map_err(|e| e.to_string())? as f32 / 255.0;
-            let a = u8::from_str_radix(&hex[6..8], 16).map_err(|e| e.to_string())? as f32 / 255.0;
-            return Ok([r, g, b, a]);
-        }
-    }
-
-    // Try comma-separated floats
-    let parts: Vec<&str> = s.split(',').map(|p| p.trim()).collect();
-    if parts.len() == 3 || parts.len() == 4 {
-        let r: f32 = parts[0]
-            .parse()
-            .map_err(|e: std::num::ParseFloatError| e.to_string())?;
-        let g: f32 = parts[1]
-            .parse()
-            .map_err(|e: std::num::ParseFloatError| e.to_string())?;
-        let b: f32 = parts[2]
-            .parse()
-            .map_err(|e: std::num::ParseFloatError| e.to_string())?;
-        let a: f32 = if parts.len() == 4 {
-            parts[3]
-                .parse()
-                .map_err(|e: std::num::ParseFloatError| e.to_string())?
-        } else {
-            1.0
-        };
-        return Ok([r, g, b, a]);
-    }
-
-    Err(format!(
-        "Invalid color format: '{s}'. Expected #RRGGBB or #RRGGBBAA"
-    ))
+    wallrs_proto::parse_color(s).map_err(|e| e.to_string())
 }
 
 fn main() {
@@ -136,6 +83,11 @@ fn main() {
         }
     };
 
+    let mut registry = RendererRegistry::new();
+    registry.register(ImageRendererFactory::new());
+    registry.register(ShaderRendererFactory::new());
+    registry.register(VideoRendererFactory::new());
+
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
         color = ?initial_color,
@@ -143,6 +95,7 @@ fn main() {
         fullscreen_pause = !args.no_fullscreen_pause,
         pause_on_maximized,
         layer = ?layer,
+        factories_count = registry.len(),
         "Initializing wallrsd live wallpaper daemon"
     );
 
@@ -155,6 +108,7 @@ fn main() {
         restore_state: !args.no_restore,
         state_path: args.state_file,
         layer,
+        registry,
     };
 
     let mut engine = match Engine::with_config(
@@ -251,5 +205,19 @@ mod tests {
             args2.state_file,
             Some(std::path::PathBuf::from("/tmp/custom_state.json"))
         );
+    }
+
+    #[test]
+    fn test_daemon_registry_initialization() {
+        let mut registry = RendererRegistry::new();
+        registry.register(ImageRendererFactory::new());
+        registry.register(ShaderRendererFactory::new());
+        registry.register(VideoRendererFactory::new());
+
+        assert_eq!(registry.len(), 3);
+        assert!(registry.is_supported("image"));
+        assert!(registry.is_supported("shader"));
+        assert!(registry.is_supported("video"));
+        assert!(!registry.is_supported("unknown"));
     }
 }

@@ -29,7 +29,7 @@ jobs:
     if: github.event_name == 'push' || !github.event.pull_request.draft
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -48,8 +48,11 @@ jobs:
             pkg-config \
             libvulkan-dev \
             libpipewire-0.3-dev \
-            libmpv-dev \
-            libwayland-dev
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-good \
+            libwayland-dev \
+            libxkbcommon-dev
 
       - name: Check code formatting
         run: cargo fmt --all -- --check
@@ -71,7 +74,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -88,8 +91,11 @@ jobs:
             pkg-config \
             libvulkan-dev \
             libpipewire-0.3-dev \
-            libmpv-dev \
-            libwayland-dev
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-good \
+            libwayland-dev \
+            libxkbcommon-dev
 
       - name: Verify release build
         run: cargo build --release --locked

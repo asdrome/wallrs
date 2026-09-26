@@ -216,21 +216,36 @@ name = "aurora"
 
 [shader]
 entry = "aurora.wgsl"
+fps = 60
 audio = true
-uniforms = { custom0 = 1.0, custom1 = 0.5 }
+uniform_mapping = ["speed", "glow"]
+
+[shader.uniforms]
+speed = 1.0
+glow = 0.5
 ```
 
 #### Shader Configuration Options (`[shader]`)
 
-| Key        | Type    | Description                                                                    |
-| :--------- | :------ | :----------------------------------------------------------------------------- |
-| `entry`    | String  | Relative path to shader source file (`.wgsl` or `.glsl`).                      |
-| `audio`    | Boolean | Connects to PipeWire stream to populate audio FFT uniforms (default: `false`). |
-| `uniforms` | Table   | Key-value table of custom float parameters (`String` to `f32`).                |
+| Key               | Type          | Default    | Description                                                                  |
+| :---------------- | :------------ | :--------- | :--------------------------------------------------------------------------- |
+| `entry`           | String        | (Required) | Relative path to shader source file (`.wgsl` or `.glsl`).                    |
+| `fps`             | Integer       | `60`       | Framerate ceiling to prevent power waste on high-Hz monitors (0 = uncapped). |
+| `audio`           | Boolean       | `false`    | Connects to PipeWire stream to populate audio FFT uniforms.                  |
+| `uniform_mapping` | Array<String> | `[]`       | Optional list mapping custom names to slots 0..10.                           |
+| `uniforms`        | Table         | `{}`       | Key-value table of custom float parameters controllable via `wallctl`.       |
+
+> [!TIP]
+> **Named Uniform Helpers in WGSL**:
+> When defining custom uniform names (e.g. `speed = 1.0`), `wallrs` automatically injects helper functions into WGSL:
+> ```wgsl
+> let current_speed = speed(); // Accesses mapped uniform slot seamlessly
+> ```
+> Alternatively, you can use `get_custom(slot_index)` or the traditional `u_params.custom0` identifiers.
 
 ### 3. Video Wallpapers (`type = "video"`)
 
-Hardware-accelerated video playback in a loop via `libmpv`.
+Hardware-accelerated video playback in a loop via GStreamer (`appsink`).
 
 ```toml
 [wallpaper]
@@ -248,7 +263,7 @@ loop = true
 | Key      | Type    | Default    | Description                                                    |
 | :------- | :------ | :--------- | :------------------------------------------------------------- |
 | `path`   | String  | (Required) | Relative path to video file (H.264, VP9, AV1 in MP4/WebM/MKV). |
-| `volume` | Float   | `50.0`     | Initial audio volume (0.0 to 100.0).                           |
+| `volume` | Float   | `0.0`      | Initial audio volume (0.0 to 100.0, muted by default).         |
 | `loop`   | Boolean | `true`     | Loop playback continuously.                                    |
 
 ### 4. Background Audio Track (`[audio]`)
@@ -266,7 +281,7 @@ Supported codecs include OGG Vorbis, MP3, FLAC, WAV, and Opus.
 
 ## GPU Shader Uniforms Specification
 
-For `shader` backends, `wallrsd` binds a uniform buffer of exactly 192 bytes aligned to `std140` at `@group(0) @binding(0)`:
+For `shader` backends, `wallrsd` binds a uniform buffer of 224 bytes aligned to `std140` at `@group(0) @binding(0)`:
 
 | Byte Offset | WGSL Identifier  | WGSL Type             | GLSL Identifier     | Description                                   |
 | :---------- | :--------------- | :-------------------- | :------------------ | :-------------------------------------------- |
@@ -275,12 +290,13 @@ For `shader` backends, `wallrsd` binds a uniform buffer of exactly 192 bytes ali
 | `12..16`    | `time_delta`     | `f32`                 | `iTimeDelta`        | Frame time delta in seconds                   |
 | `16..32`    | `mouse`          | `vec4<f32>`           | `iMouse`            | Cursor `(x, y, click_x, click_y)` coordinates |
 | `32..36`    | `frame`          | `u32`                 | `iFrame`            | Monotonic rendered frame counter              |
-| `36..48`    | `custom0, 1, 2`  | `f32, f32, f32`       | `u_custom0, 1, 2`   | Runtime properties controllable via `wallctl` |
+| `36..48`    | `custom0, 1, 2`  | `f32, f32, f32`       | `u_custom0, 1, 2`   | Runtime properties (slots 0..2)               |
 | `48..52`    | `audio_bass`     | `f32`                 | `iBass`             | PipeWire bass energy [0.0, 1.0]               |
 | `52..56`    | `audio_mid`      | `f32`                 | `iMid`              | PipeWire mid-range energy [0.0, 1.0]          |
 | `56..60`    | `audio_treble`   | `f32`                 | `iTreble`           | PipeWire treble energy [0.0, 1.0]             |
 | `60..64`    | `audio_volume`   | `f32`                 | `iVolume`           | PipeWire overall RMS volume [0.0, 1.0]        |
 | `64..192`   | `audio_spectrum` | `array<vec4<f32>, 8>` | `audio_spectrum[8]` | 32 logarithmic FFT frequency bands            |
+| `192..224`  | `custom_extra`   | `array<vec4<f32>, 2>` | `custom_extra[2]`   | Extended runtime properties (slots 3..10)     |
 
 ### WGSL Struct Definition
 
@@ -299,9 +315,21 @@ struct ShaderUniforms {
     audio_treble: f32,
     audio_volume: f32,
     audio_spectrum: array<vec4<f32>, 8>,
+    custom_extra: array<vec4<f32>, 2>,
 };
 
 @group(0) @binding(0) var<uniform> u_params: ShaderUniforms;
+
+fn get_custom(slot: u32) -> f32 {
+    if (slot == 0u) { return u_params.custom0; }
+    if (slot == 1u) { return u_params.custom1; }
+    if (slot == 2u) { return u_params.custom2; }
+    let extra_idx = slot - 3u;
+    if (extra_idx < 8u) {
+        return u_params.custom_extra[extra_idx / 4u][extra_idx % 4u];
+    }
+    return 0.0;
+}
 ```
 
 ### Shadertoy GLSL Compatibility

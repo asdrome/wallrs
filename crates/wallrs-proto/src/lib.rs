@@ -24,6 +24,8 @@ pub enum Command {
     SetWallpaper {
         output: OutputSelector,
         manifest_path: PathBuf,
+        #[serde(default)]
+        unmute: bool,
     },
     SetProperty {
         output: OutputSelector,
@@ -39,12 +41,21 @@ pub enum Command {
     TogglePause {
         output: Option<String>,
     },
+    Mute {
+        output: Option<String>,
+    },
+    Unmute {
+        output: Option<String>,
+    },
     ToggleMute {
         output: Option<String>,
     },
     Screenshot {
         output: String,
         path: PathBuf,
+    },
+    ValidateWallpaper {
+        manifest_path: PathBuf,
     },
     ListOutputs,
     Kill,
@@ -256,7 +267,11 @@ pub struct ShaderConfig {
     #[serde(default)]
     pub audio: Option<bool>,
     #[serde(default)]
+    pub fps: Option<u32>,
+    #[serde(default)]
     pub uniforms: std::collections::HashMap<String, f32>,
+    #[serde(default)]
+    pub uniform_mapping: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -308,6 +323,121 @@ pub fn default_socket_path() -> PathBuf {
     }
 }
 
+/// Error returned when parsing a color string.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum ParseColorError {
+    #[error("Color string is empty")]
+    Empty,
+    #[error("Invalid color format '{0}' (expected #RGB, #RGBA, #RRGGBB, #RRGGBBAA, or r,g,b[,a])")]
+    InvalidFormat(String),
+    #[error("Failed to parse color component '{0}': {1}")]
+    InvalidComponent(String, String),
+}
+
+/// Parses a color string into RGBA floats `[r, g, b, a]` where each component is in `0.0..=1.0`.
+///
+/// Supports:
+/// - Hex `#RGB` (e.g. `"#fff"` -> `[1.0, 1.0, 1.0, 1.0]`)
+/// - Hex `#RGBA` (e.g. `"#f008"` -> `[1.0, 0.0, 0.0, 0.5333]`)
+/// - Hex `#RRGGBB` (e.g. `"#ff0000"` -> `[1.0, 0.0, 0.0, 1.0]`)
+/// - Hex `#RRGGBBAA` (e.g. `"#00ff0080"` -> `[0.0, 1.0, 0.0, 0.5019]`)
+/// - Hex without leading `#` (e.g. `"0000ff"` -> `[0.0, 0.0, 1.0, 1.0]`)
+/// - Comma-separated floats (e.g. `"1.0, 0.5, 0.0"` or `"1.0, 0.5, 0.0, 0.8"`)
+pub fn parse_color(s: &str) -> Result<[f32; 4], ParseColorError> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err(ParseColorError::Empty);
+    }
+
+    if s.contains(',') {
+        let parts: Vec<&str> = s.split(',').map(|p| p.trim()).collect();
+        if parts.len() == 3 || parts.len() == 4 {
+            let r: f32 = parts[0].parse().map_err(|e: std::num::ParseFloatError| {
+                ParseColorError::InvalidComponent(parts[0].into(), e.to_string())
+            })?;
+            let g: f32 = parts[1].parse().map_err(|e: std::num::ParseFloatError| {
+                ParseColorError::InvalidComponent(parts[1].into(), e.to_string())
+            })?;
+            let b: f32 = parts[2].parse().map_err(|e: std::num::ParseFloatError| {
+                ParseColorError::InvalidComponent(parts[2].into(), e.to_string())
+            })?;
+            let a: f32 = if parts.len() == 4 {
+                parts[3].parse().map_err(|e: std::num::ParseFloatError| {
+                    ParseColorError::InvalidComponent(parts[3].into(), e.to_string())
+                })?
+            } else {
+                1.0
+            };
+            return Ok([
+                r.clamp(0.0, 1.0),
+                g.clamp(0.0, 1.0),
+                b.clamp(0.0, 1.0),
+                a.clamp(0.0, 1.0),
+            ]);
+        }
+        return Err(ParseColorError::InvalidFormat(s.to_string()));
+    }
+
+    let hex = s.strip_prefix('#').unwrap_or(s);
+    let (r, g, b, a) = match hex.len() {
+        3 => {
+            let r = u8::from_str_radix(&hex[0..1], 16)
+                .map_err(|e| ParseColorError::InvalidComponent(hex[0..1].into(), e.to_string()))?
+                * 17;
+            let g = u8::from_str_radix(&hex[1..2], 16)
+                .map_err(|e| ParseColorError::InvalidComponent(hex[1..2].into(), e.to_string()))?
+                * 17;
+            let b = u8::from_str_radix(&hex[2..3], 16)
+                .map_err(|e| ParseColorError::InvalidComponent(hex[2..3].into(), e.to_string()))?
+                * 17;
+            (r, g, b, 255)
+        }
+        4 => {
+            let r = u8::from_str_radix(&hex[0..1], 16)
+                .map_err(|e| ParseColorError::InvalidComponent(hex[0..1].into(), e.to_string()))?
+                * 17;
+            let g = u8::from_str_radix(&hex[1..2], 16)
+                .map_err(|e| ParseColorError::InvalidComponent(hex[1..2].into(), e.to_string()))?
+                * 17;
+            let b = u8::from_str_radix(&hex[2..3], 16)
+                .map_err(|e| ParseColorError::InvalidComponent(hex[2..3].into(), e.to_string()))?
+                * 17;
+            let a = u8::from_str_radix(&hex[3..4], 16)
+                .map_err(|e| ParseColorError::InvalidComponent(hex[3..4].into(), e.to_string()))?
+                * 17;
+            (r, g, b, a)
+        }
+        6 => {
+            let r = u8::from_str_radix(&hex[0..2], 16)
+                .map_err(|e| ParseColorError::InvalidComponent(hex[0..2].into(), e.to_string()))?;
+            let g = u8::from_str_radix(&hex[2..4], 16)
+                .map_err(|e| ParseColorError::InvalidComponent(hex[2..4].into(), e.to_string()))?;
+            let b = u8::from_str_radix(&hex[4..6], 16)
+                .map_err(|e| ParseColorError::InvalidComponent(hex[4..6].into(), e.to_string()))?;
+            (r, g, b, 255)
+        }
+        8 => {
+            let r = u8::from_str_radix(&hex[0..2], 16)
+                .map_err(|e| ParseColorError::InvalidComponent(hex[0..2].into(), e.to_string()))?;
+            let g = u8::from_str_radix(&hex[2..4], 16)
+                .map_err(|e| ParseColorError::InvalidComponent(hex[2..4].into(), e.to_string()))?;
+            let b = u8::from_str_radix(&hex[4..6], 16)
+                .map_err(|e| ParseColorError::InvalidComponent(hex[4..6].into(), e.to_string()))?;
+            let a = u8::from_str_radix(&hex[6..8], 16)
+                .map_err(|e| ParseColorError::InvalidComponent(hex[6..8].into(), e.to_string()))?;
+            (r, g, b, a)
+        }
+        _ => return Err(ParseColorError::InvalidFormat(s.to_string())),
+    };
+
+    Ok([
+        r as f32 / 255.0,
+        g as f32 / 255.0,
+        b as f32 / 255.0,
+        a as f32 / 255.0,
+    ])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -349,6 +479,13 @@ mod tests {
         let json_mute = serde_json::to_string(&cmd_mute).unwrap();
         let parsed_mute: Command = serde_json::from_str(&json_mute).unwrap();
         assert_eq!(cmd_mute, parsed_mute);
+
+        let cmd_validate = Command::ValidateWallpaper {
+            manifest_path: PathBuf::from("/etc/wallpapers/aurora/wallpaper.toml"),
+        };
+        let json_validate = serde_json::to_string(&cmd_validate).unwrap();
+        let parsed_validate: Command = serde_json::from_str(&json_validate).unwrap();
+        assert_eq!(cmd_validate, parsed_validate);
 
         let cmd_list = Command::ListOutputs;
         let json_list = serde_json::to_string(&cmd_list).unwrap();
@@ -584,5 +721,72 @@ day_night = "tint"
         assert_eq!(curve[0].tint, [0.15, 0.22, 0.40]);
         assert_eq!(curve[1].hour, 12.0);
         assert_eq!(curve[1].tint, [1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn test_parse_color() {
+        // Hex 3-digit (#RGB)
+        let c = parse_color("#f00").unwrap();
+        assert_eq!(c, [1.0, 0.0, 0.0, 1.0]);
+
+        // Hex 4-digit (#RGBA)
+        let c = parse_color("#f008").unwrap();
+        assert_eq!(c[0], 1.0);
+        assert_eq!(c[1], 0.0);
+        assert_eq!(c[2], 0.0);
+        assert!((c[3] - 136.0 / 255.0).abs() < 1e-4);
+
+        // Hex 6-digit (#RRGGBB)
+        let c = parse_color("#00ff00").unwrap();
+        assert_eq!(c, [0.0, 1.0, 0.0, 1.0]);
+
+        // Hex without #
+        let c = parse_color("0000ff").unwrap();
+        assert_eq!(c, [0.0, 0.0, 1.0, 1.0]);
+
+        // Hex 8-digit (#RRGGBBAA)
+        let c = parse_color("#00ff0080").unwrap();
+        assert_eq!(c[0], 0.0);
+        assert_eq!(c[1], 1.0);
+        assert_eq!(c[2], 0.0);
+        assert!((c[3] - 128.0 / 255.0).abs() < 1e-4);
+
+        // Comma-separated floats
+        let c = parse_color("0.2, 0.4, 0.6").unwrap();
+        assert_eq!(c, [0.2, 0.4, 0.6, 1.0]);
+
+        let c = parse_color("0.2, 0.4, 0.6, 0.8").unwrap();
+        assert_eq!(c, [0.2, 0.4, 0.6, 0.8]);
+
+        // Invalids
+        assert!(parse_color("").is_err());
+        assert!(parse_color("#12").is_err());
+        assert!(parse_color("#12345").is_err());
+        assert!(parse_color("#gggggg").is_err());
+        assert!(parse_color("0.1, 0.2").is_err());
+    }
+
+    #[test]
+    fn test_mute_unmute_commands_roundtrip() {
+        let cmd_mute = Command::Mute {
+            output: Some("eDP-1".into()),
+        };
+        let json = serde_json::to_string(&cmd_mute).unwrap();
+        let parsed: Command = serde_json::from_str(&json).unwrap();
+        assert_eq!(cmd_mute, parsed);
+
+        let cmd_unmute = Command::Unmute { output: None };
+        let json = serde_json::to_string(&cmd_unmute).unwrap();
+        let parsed: Command = serde_json::from_str(&json).unwrap();
+        assert_eq!(cmd_unmute, parsed);
+
+        let cmd_set = Command::SetWallpaper {
+            output: OutputSelector::All,
+            manifest_path: PathBuf::from("/tmp/wallpaper.toml"),
+            unmute: true,
+        };
+        let json = serde_json::to_string(&cmd_set).unwrap();
+        let parsed: Command = serde_json::from_str(&json).unwrap();
+        assert_eq!(cmd_set, parsed);
     }
 }

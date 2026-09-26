@@ -1,7 +1,10 @@
 use std::time::Duration;
 use thiserror::Error;
-pub use wallrs_proto::PropertyValue;
 
+pub mod factory;
+
+pub use factory::{RendererCapabilities, RendererFactory, RendererRegistry};
+pub use wallrs_proto::PropertyValue;
 pub use wgpu;
 
 /// Error returned by renderer operations.
@@ -18,6 +21,12 @@ pub enum RendererError {
 
     #[error("Invalid property value: {0}")]
     InvalidPropertyValue(String),
+
+    #[error("Validation failed: {0}")]
+    ValidationFailed(String),
+
+    #[error("Unsupported wallpaper type: {0}")]
+    UnsupportedType(String),
 }
 
 /// Context provided to the renderer on every frame.

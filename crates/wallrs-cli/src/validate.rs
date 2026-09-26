@@ -1,10 +1,18 @@
 use crate::xdg;
-use std::path::Path;
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
+use wallrs_proto::{Command, Response, default_socket_path};
 
-/// Validates and lints a wallpaper manifest and its associated assets.
+/// Validates and lints a wallpaper manifest using the default socket if available.
+pub fn validate_wallpaper(path: &Path) -> Result<(), String> {
+    validate_wallpaper_with_socket(path, None)
+}
+
+/// Validates and lints a wallpaper manifest and its associated assets with an optional custom socket.
 ///
 /// Resolves paths directly or via standard XDG wallpaper directories.
-pub fn validate_wallpaper(path: &Path) -> Result<(), String> {
+pub fn validate_wallpaper_with_socket(path: &Path, socket: Option<&Path>) -> Result<(), String> {
     let manifest_path = xdg::resolve_wallpaper_path(path)?;
 
     let content = std::fs::read_to_string(&manifest_path)
@@ -100,43 +108,84 @@ pub fn validate_wallpaper(path: &Path) -> Result<(), String> {
             let shader_code = std::fs::read_to_string(&shader_file)
                 .map_err(|e| format!("Failed to read shader file {:?}: {}", shader_file, e))?;
 
+            if shader_code.trim().is_empty() {
+                return Err(format!("Shader entry file {:?} is empty", shader_file));
+            }
+
             let is_glsl = shader_file.extension().and_then(|ext| ext.to_str()) == Some("glsl")
                 || shader_code.contains("void mainImage");
 
-            if is_glsl {
-                match wallrs_content_shader::translate_shadertoy_glsl_to_wgsl(&shader_code) {
-                    Ok(wgsl) => {
-                        if let Err(e) = naga::front::wgsl::parse_str(&wgsl) {
-                            return Err(format!(
-                                "Translated Shadertoy WGSL failed validation:\n{}",
-                                e.emit_to_string(&wgsl)
-                            ));
+            // Attempt to query live daemon compiler via IPC socket if available
+            let socket_path = socket
+                .map(PathBuf::from)
+                .unwrap_or_else(default_socket_path);
+            let mut validated_by_daemon = false;
+
+            if let Ok(mut stream) = UnixStream::connect(&socket_path) {
+                let cmd = Command::ValidateWallpaper {
+                    manifest_path: manifest_path.clone(),
+                };
+                if let Ok(json) = serde_json::to_string(&cmd) {
+                    let _ = stream.write_all(json.as_bytes());
+                    let _ = stream.write_all(b"\n");
+                    let mut reader = BufReader::new(stream);
+                    let mut response_line = String::new();
+                    if reader.read_line(&mut response_line).is_ok()
+                        && let Ok(resp) = serde_json::from_str::<Response>(&response_line)
+                    {
+                        match resp {
+                            Response::Ok => {
+                                validated_by_daemon = true;
+                                println!(
+                                    "    ✓ Daemon GPU pipeline validated shader AST successfully: {:?}",
+                                    sh.entry
+                                );
+                            }
+                            Response::Error(e) => {
+                                return Err(format!(
+                                    "Daemon shader validation error in {:?}: {}",
+                                    shader_file, e
+                                ));
+                            }
+                            _ => {}
                         }
-                        println!(
-                            "    ✓ Shadertoy GLSL shader validated successfully: {:?}",
-                            sh.entry
-                        );
                     }
-                    Err(e) => {
+                }
+            }
+
+            if !validated_by_daemon {
+                // Structural offline validation without pulling Naga / WGPU into the client CLI
+                if is_glsl {
+                    if !shader_code.contains("mainImage") && !shader_code.contains("main(") {
                         return Err(format!(
-                            "Shadertoy GLSL translation error in {:?}: {}",
-                            shader_file, e
+                            "GLSL shader {:?} is missing entry point (expected 'void mainImage' or 'void main')",
+                            shader_file
                         ));
                     }
+                    println!(
+                        "    ✓ Shadertoy GLSL structure verified: {:?} (offline check; run 'wallrsd' for live GPU Naga AST verification)",
+                        sh.entry
+                    );
+                } else {
+                    if !shader_code.contains("@fragment") && !shader_code.contains("fs_main") {
+                        return Err(format!(
+                            "WGSL shader {:?} is missing fragment entry point (expected '@fragment' or 'fs_main')",
+                            shader_file
+                        ));
+                    }
+                    let open_braces = shader_code.chars().filter(|&c| c == '{').count();
+                    let close_braces = shader_code.chars().filter(|&c| c == '}').count();
+                    if open_braces != close_braces {
+                        return Err(format!(
+                            "WGSL shader {:?} has unbalanced braces: {} open vs {} close",
+                            shader_file, open_braces, close_braces
+                        ));
+                    }
+                    println!(
+                        "    ✓ Native WGSL structure verified: {:?} (offline check; run 'wallrsd' for live GPU Naga AST verification)",
+                        sh.entry
+                    );
                 }
-            } else {
-                let prepared = wallrs_content_shader::prepare_wgsl(&shader_code);
-                if let Err(e) = naga::front::wgsl::parse_str(&prepared) {
-                    return Err(format!(
-                        "WGSL shader syntax error in {:?}:\n{}",
-                        shader_file,
-                        e.emit_to_string(&prepared)
-                    ));
-                }
-                println!(
-                    "    ✓ Native WGSL shader validated successfully: {:?}",
-                    sh.entry
-                );
             }
 
             if sh.audio == Some(true) {

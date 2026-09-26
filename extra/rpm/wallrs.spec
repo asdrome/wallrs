@@ -1,5 +1,5 @@
 Name:           wallrs
-Version:        1.1.4
+Version:        1.2.0
 Release:        1%{?dist}
 Summary:        High-performance Wayland live wallpaper daemon and CLI controller
 
@@ -14,21 +14,25 @@ BuildRequires:  clang
 BuildRequires:  clang-devel
 BuildRequires:  pkgconf
 BuildRequires:  pipewire-devel
-BuildRequires:  mpv-devel
+BuildRequires:  gstreamer1-devel
+BuildRequires:  gstreamer1-plugins-base-devel
 BuildRequires:  wayland-devel
+BuildRequires:  libxkbcommon-devel
 BuildRequires:  vulkan-loader-devel
 BuildRequires:  systemd-rpm-macros
 
 # Runtime dependencies (required for end-user execution)
-# Note: Dynamic shared library dependencies (libpipewire, libmpv) are
+# Note: Dynamic shared library dependencies (libpipewire, libgstreamer) are
 # automatically detected and added by RPM's find-requires script.
 Requires:       vulkan-loader
 Requires:       pipewire-libs
-Requires:       mpv-libs
+Requires:       gstreamer1
+Requires:       gstreamer1-plugins-base
+Requires:       gstreamer1-plugins-good
 
 %description
 A high-performance, Wayland-native live wallpaper daemon (wallrsd) and CLI
-controller (wallctl) written in pure Rust with wgpu/Vulkan, PipeWire, and libmpv2.
+controller (wallctl) written in pure Rust with wgpu/Vulkan, PipeWire, and GStreamer.
 Supports multi-layer parallax images, procedural WGSL/Shadertoy shaders,
 hardware-accelerated videos, PipeWire audio reactivity, and automatic fullscreen/maximize pause.
 
@@ -68,6 +72,8 @@ cargo test --workspace --locked
 %{_metainfodir}/com.asdrome.wallrs.metainfo.xml
 
 %changelog
+* Fri Sep 25 2026 Antonio S. Dromundo <sebastiandromundo@outlook.com> - 1.2.0-1
+- Release 1.2.0: GStreamer migration, NV12 zero-copy hardware acceleration, plugin architecture
 * Sun Sep 06 2026 Antonio S. Dromundo <sebastiandromundo@outlook.com> - 0.1.0-1
 - Initial release of wallrs live wallpaper daemon
 
