@@ -51,7 +51,8 @@ jobs:
             libgstreamer1.0-dev \
             libgstreamer-plugins-base1.0-dev \
             gstreamer1.0-plugins-good \
-            libwayland-dev
+            libwayland-dev \
+            libxkbcommon-dev
 
       - name: Check code formatting
         run: cargo fmt --all -- --check
@@ -93,7 +94,8 @@ jobs:
             libgstreamer1.0-dev \
             libgstreamer-plugins-base1.0-dev \
             gstreamer1.0-plugins-good \
-            libwayland-dev
+            libwayland-dev \
+            libxkbcommon-dev
 
       - name: Verify release build
         run: cargo build --release --locked

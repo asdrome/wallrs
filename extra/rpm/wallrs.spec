@@ -17,6 +17,7 @@ BuildRequires:  pipewire-devel
 BuildRequires:  gstreamer1-devel
 BuildRequires:  gstreamer1-plugins-base-devel
 BuildRequires:  wayland-devel
+BuildRequires:  libxkbcommon-devel
 BuildRequires:  vulkan-loader-devel
 BuildRequires:  systemd-rpm-macros
 
