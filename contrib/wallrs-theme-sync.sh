@@ -38,6 +38,22 @@ if [[ ! -f "$CONTRIB_DIR/kde-accent-color.sh" ]]; then
     fi
 fi
 
+# 2.5 Helper to safely query preview path (with retry during daemon startup)
+get_preview_path() {
+    local attempts=15
+    local img=""
+    while [[ $attempts -gt 0 ]]; do
+        if img="$("$WALLCTL" preview "$@" 2>/dev/null)" && [[ -n "$img" && -f "$img" ]]; then
+            echo "$img"
+            return 0
+        fi
+        attempts=$((attempts - 1))
+        sleep 0.2
+    done
+    # Final attempt with standard error visible for diagnosis
+    "$WALLCTL" preview "$@"
+}
+
 # 3. Helper for Noctalia Shell Synchronization
 sync_noctalia() {
     local preview="$1"
@@ -94,7 +110,7 @@ case "$DESKTOP" in
         fi
         ;;
     *niri*|*Niri*)
-        PREVIEW_PATH="$("$WALLCTL" preview "$@")"
+        PREVIEW_PATH="$(get_preview_path "$@")"
         if sync_noctalia "$PREVIEW_PATH"; then
             exit 0
         elif command -v matugen &>/dev/null; then
@@ -104,7 +120,7 @@ case "$DESKTOP" in
         fi
         ;;
     *Hyprland*|*sway*|*wlroots*|*Sway*)
-        PREVIEW_PATH="$("$WALLCTL" preview "$@")"
+        PREVIEW_PATH="$(get_preview_path "$@")"
         if pgrep -x noctalia &>/dev/null && sync_noctalia "$PREVIEW_PATH"; then
             exit 0
         fi
@@ -126,7 +142,7 @@ case "$DESKTOP" in
         ;;
     *)
         # Fallback: check if noctalia, matugen, or pywal are available regardless of compositor
-        PREVIEW_PATH="$("$WALLCTL" preview "$@")"
+        PREVIEW_PATH="$(get_preview_path "$@")"
         if pgrep -x noctalia &>/dev/null && sync_noctalia "$PREVIEW_PATH"; then
             exit 0
         elif command -v matugen &>/dev/null; then

@@ -990,13 +990,26 @@ impl WallpaperRenderer for VideoRenderer {
     fn is_dirty(&self) -> bool {
         self.dirty
     }
+
+    fn teardown(&mut self) {
+        if let Some(pipeline) = self.pipeline.take() {
+            let _ = pipeline.set_state(gst::State::Null);
+        }
+        self.appsink = None;
+        self.bus = None;
+        self.texture_y = None;
+        self.texture_y_view = None;
+        self.texture_uv = None;
+        self.texture_uv_view = None;
+        self.bind_group = None;
+        self.color_buffer = None;
+        self.pipeline_gpu = None;
+    }
 }
 
 impl Drop for VideoRenderer {
     fn drop(&mut self) {
-        if let Some(pipeline) = self.pipeline.take() {
-            let _ = pipeline.set_state(gst::State::Null);
-        }
+        self.teardown();
     }
 }
 

@@ -810,6 +810,10 @@ impl EngineState {
                     for (k, v) in properties {
                         let _ = out.set_property(&k, v, &self.qh);
                     }
+                    // Re-save state file on restore so watchers (such as
+                    // wallrs-theme-sync.path or custom inotify monitors)
+                    // detect the wallpaper activation on startup and synchronize desktop themes.
+                    let _ = crate::state::save_state(&self.state_path, &self.state_snapshot);
                 }
             }
             crate::state::SavedOutputConfig::Color { color } => {
@@ -842,10 +846,10 @@ impl EngineState {
 
 /// Main engine runner orchestrating Wayland, Calloop, WGPU, and IPC socket server.
 pub struct Engine {
-    pub conn: Connection,
-    pub event_loop: calloop::EventLoop<'static, EngineState>,
-    pub state: EngineState,
     pub socket_path: PathBuf,
+    pub state: EngineState,
+    pub event_loop: calloop::EventLoop<'static, EngineState>,
+    pub conn: Connection,
 }
 
 impl Engine {
@@ -1035,10 +1039,10 @@ impl Engine {
         };
 
         Ok(Self {
-            conn,
-            event_loop,
-            state,
             socket_path,
+            state,
+            event_loop,
+            conn,
         })
     }
 
@@ -1079,5 +1083,26 @@ impl Drop for Engine {
             let _ = std::fs::remove_file(&self.socket_path);
             tracing::info!(socket = ?self.socket_path, "Cleaned up IPC socket");
         }
+
+        // Wait for any pending GPU submissions to finish before tearing down surfaces
+        let _ = self
+            .state
+            .wgpu_device
+            .poll(wgpu::PollType::wait_indefinitely());
+
+        // Explicitly tear down all outputs (renderers, wgpu surfaces, and layer surfaces)
+        // while wgpu_device, wgpu_instance, and Wayland connection are still alive and valid.
+        for out in self.state.outputs.values_mut() {
+            out.teardown();
+        }
+        self.state.outputs.clear();
+        self.state.pointers.clear();
+        self.state.cursor_shape_devices.clear();
+        self.state.cursor_shape_mgr = None;
+        self.state.toplevels.clear();
+        self.state.toplevel_manager = None;
+        self.state.audio_capture = None;
+
+        let _ = self.conn.flush();
     }
 }

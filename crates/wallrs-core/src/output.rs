@@ -32,10 +32,10 @@ pub enum OutputError {
 pub struct OutputSurface {
     pub name: Option<String>,
     pub wl_output: wl_output::WlOutput,
-    pub layer_surface: LayerSurface,
-    pub wgpu_surface: Option<wgpu::Surface<'static>>,
-    pub surface_config: Option<wgpu::SurfaceConfiguration>,
     pub renderer: Option<Box<dyn WallpaperRenderer>>,
+    pub surface_config: Option<wgpu::SurfaceConfiguration>,
+    pub wgpu_surface: Option<wgpu::Surface<'static>>,
+    pub layer_surface: LayerSurface,
     pub width: u32,
     pub height: u32,
     pub logical_width: u32,
@@ -614,6 +614,12 @@ impl OutputSurface {
         self.audio.clear();
         self.wgpu_surface = None;
         self.surface_config = None;
+    }
+}
+
+impl Drop for OutputSurface {
+    fn drop(&mut self) {
+        self.teardown();
     }
 }
 
